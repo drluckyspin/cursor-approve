@@ -175,7 +175,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			output.info("Cursor's command is silent when nothing is pending, so poll");
 			output.info("count is not a count of actual approvals.");
 			output.info("--- end diagnostics ---");
-			output.show(true);
+			output.show();
 		}),
 
 		// Discovery helper: Cursor's composer commands are undocumented, and
@@ -189,7 +189,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 				output.info(command);
 			}
 			output.info("--- end ---");
-			output.show(true);
+			output.show();
 		}),
 
 		vscode.workspace.onDidChangeConfiguration((event) => {
