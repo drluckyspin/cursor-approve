@@ -100,6 +100,22 @@ function startPolling(): void {
 	output.info(`Polling every ${interval}ms in '${currentMode()}' mode.`);
 }
 
+/**
+ * The status bar API only accepts `statusBarItem.errorBackground` or
+ * `statusBarItem.warningBackground` as a background, and overrides the
+ * foreground whenever one is set. Tinting the foreground instead keeps the
+ * active state legible while following whatever accent the theme defines.
+ */
+function activeColor(): string | vscode.ThemeColor | undefined {
+	const id = config().get<string>("activeColor", "textLink.foreground").trim();
+
+	if (!id) {
+		return undefined;
+	}
+
+	return id.startsWith("#") ? id : new vscode.ThemeColor(id);
+}
+
 function updateStatusBar(): void {
 	if (!config().get<boolean>("showStatusBarItem", true)) {
 		statusBar.hide();
@@ -111,9 +127,7 @@ function updateStatusBar(): void {
 	statusBar.tooltip = enabled
 		? `Automatically approving pending tool calls in '${currentMode()}' mode. Click to disable.`
 		: "Automatic approval is off. Click to enable.";
-	statusBar.backgroundColor = enabled
-		? new vscode.ThemeColor("statusBarItem.warningBackground")
-		: undefined;
+	statusBar.color = enabled ? activeColor() : undefined;
 	statusBar.show();
 }
 

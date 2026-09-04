@@ -73,15 +73,23 @@ Automatic approval is **off** by default. Enable it from the status bar item, th
 
 ### Settings
 
-| Setting                           | Type      | Default | Description                                                 |
-| --------------------------------- | --------- | ------- | ----------------------------------------------------------- |
-| `cursorApprove.enabled`           | `boolean` | `false` | Poll for pending tool calls and approve them                |
-| `cursorApprove.intervalMs`        | `number`  | `1000`  | How often to check, in milliseconds                         |
-| `cursorApprove.mode`              | `string`  | `run`   | `run` approves once, `allowlist` also remembers the command |
-| `cursorApprove.onlyWhenFocused`   | `boolean` | `false` | Only approve while this window has focus                    |
-| `cursorApprove.showStatusBarItem` | `boolean` | `true`  | Show the status bar toggle                                  |
+| Setting                           | Type      | Default               | Description                                                 |
+| --------------------------------- | --------- | --------------------- | ----------------------------------------------------------- |
+| `cursorApprove.enabled`           | `boolean` | `false`               | Poll for pending tool calls and approve them                |
+| `cursorApprove.intervalMs`        | `number`  | `1000`                | How often to check, in milliseconds                         |
+| `cursorApprove.mode`              | `string`  | `run`                 | `run` approves once, `allowlist` also remembers the command |
+| `cursorApprove.onlyWhenFocused`   | `boolean` | `false`               | Only approve while this window has focus                    |
+| `cursorApprove.showStatusBarItem` | `boolean` | `true`                | Show the status bar toggle                                  |
+| `cursorApprove.activeColor`       | `string`  | `textLink.foreground` | Status bar colour while active                              |
 
-The status bar item turns amber while automatic approval is active, so an unattended session is never silently armed.
+The status bar item is tinted while automatic approval is active, so an unattended session is never silently armed. It
+defaults to `textLink.foreground`, which resolves to the current theme's accent colour, so it stays consistent when you
+change themes. Set `cursorApprove.activeColor` to any other theme colour identifier or to a literal hex value to
+override it.
+
+Note that VS Code only permits `statusBarItem.errorBackground` and `statusBarItem.warningBackground` as status bar
+_background_ colours, and overrides the foreground whenever a background is set. Tinting the foreground is therefore the
+only way to follow an arbitrary accent colour.
 
 ## Development
 

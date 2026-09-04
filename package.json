@@ -93,6 +93,11 @@
 					"type": "boolean",
 					"default": true,
 					"description": "Show a status bar item indicating whether automatic approval is active."
+				},
+				"cursorApprove.activeColor": {
+					"type": "string",
+					"default": "textLink.foreground",
+					"markdownDescription": "Colour of the status bar item while automatic approval is active. Accepts a [theme colour identifier](https://code.visualstudio.com/api/references/theme-color) such as `textLink.foreground`, which follows the current theme's accent, or a literal hex value such as `#bd7ba2`. Leave empty to use the default status bar colour."
 				}
 			}
 		}
