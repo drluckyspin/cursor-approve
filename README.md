@@ -7,7 +7,6 @@ It puts a toggle button in the status bar to allow you toggle auto approve off a
 
 <img width="322" height="46" alt="image" src="https://github.com/user-attachments/assets/c34c57b4-4bfa-4a7d-9622-d448ba52f11f" />
 
-
 It does this by invoking Cursor's own approval command rather than by simulating keystrokes or detecting the button on
 screen. That makes it independent of your theme, window position, and display scaling, and it cannot leak a stray
 `Enter` into your editor.
@@ -15,7 +14,7 @@ screen. That makes it independent of your theme, window position, and display sc
 ## Requirements
 
 - **Cursor**: This extension will install into stock VS Code but does nothing there, because the commands it calls are
-registered by Cursor's agent panel. It logs a warning on activation if those commands are missing.
+  registered by Cursor's agent panel. It logs a warning on activation if those commands are missing.
 
 ## How it works
 
