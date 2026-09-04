@@ -46,7 +46,7 @@ Calling the command on a timer is therefore a genuine no-op most of the time, wi
 From the packaged build:
 
 ```bash
-cursor --install-extension cursor-approve-0.1.0.vsix
+cursor --install-extension cursor-approve-0.2.0.vsix
 ```
 
 From source:
@@ -56,7 +56,7 @@ git clone https://github.com/drluckyspin/cursor-approve.git
 cd cursor-approve
 npm install
 npm run package
-cursor --install-extension cursor-approve-0.1.0.vsix
+cursor --install-extension cursor-approve-0.2.0.vsix
 ```
 
 ## Usage
