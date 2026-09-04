@@ -3,13 +3,18 @@
 A Cursor extension that automatically approves the agent's pending tool calls, so long-running agent sessions do not
 stall waiting for you to click **Run**.
 
+It puts a toggle button in the status bar to allow you toggle auto approve off and on.
+
+<img width="322" height="46" alt="image" src="https://github.com/user-attachments/assets/c34c57b4-4bfa-4a7d-9622-d448ba52f11f" />
+
+
 It does this by invoking Cursor's own approval command rather than by simulating keystrokes or detecting the button on
 screen. That makes it independent of your theme, window position, and display scaling, and it cannot leak a stray
 `Enter` into your editor.
 
 ## Requirements
 
-Cursor. This extension will install into stock VS Code but does nothing there, because the commands it calls are
+- **Cursor**: This extension will install into stock VS Code but does nothing there, because the commands it calls are
 registered by Cursor's agent panel. It logs a warning on activation if those commands are missing.
 
 ## How it works
@@ -39,7 +44,7 @@ Calling the command on a timer is therefore a genuine no-op most of the time, wi
 
 ## Install
 
-From a packaged build:
+From the packaged build:
 
 ```bash
 cursor --install-extension cursor-approve-0.1.0.vsix
