@@ -11,6 +11,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - The active status bar item now follows the theme's accent colour instead of using the amber warning background,
   configurable through `cursorApprove.activeColor`.
+- Added `cursorApprove.statusBarStyle` to choose between `foreground`, `background`, and `none` highlighting.
 - `Show Diagnostics` and `List Cursor Composer Commands` now focus the output channel rather than revealing it behind
   the current panel.
 

@@ -79,16 +79,37 @@ Automatic approval is **off** by default. Enable it from the status bar item, th
 | `cursorApprove.mode`              | `string`  | `run`                 | `run` approves once, `allowlist` also remembers the command |
 | `cursorApprove.onlyWhenFocused`   | `boolean` | `false`               | Only approve while this window has focus                    |
 | `cursorApprove.showStatusBarItem` | `boolean` | `true`                | Show the status bar toggle                                  |
-| `cursorApprove.activeColor`       | `string`  | `textLink.foreground` | Status bar colour while active                              |
+| `cursorApprove.statusBarStyle`    | `string`  | `foreground`          | `foreground`, `background`, or `none`                       |
+| `cursorApprove.activeColor`       | `string`  | `textLink.foreground` | Accent colour used by the `foreground` style                |
 
-The status bar item is tinted while automatic approval is active, so an unattended session is never silently armed. It
-defaults to `textLink.foreground`, which resolves to the current theme's accent colour, so it stays consistent when you
-change themes. Set `cursorApprove.activeColor` to any other theme colour identifier or to a literal hex value to
-override it.
+The status bar item is highlighted while automatic approval is active, so an unattended session is never silently armed.
+`cursorApprove.statusBarStyle` chooses how:
 
-Note that VS Code only permits `statusBarItem.errorBackground` and `statusBarItem.warningBackground` as status bar
-_background_ colours, and overrides the foreground whenever a background is set. Tinting the foreground is therefore the
-only way to follow an arbitrary accent colour.
+| Style        | Appearance                                                                             |
+| ------------ | -------------------------------------------------------------------------------------- |
+| `foreground` | Tints the text and icon with `cursorApprove.activeColor`, following the theme's accent |
+| `background` | Fills the item using the theme's status bar warning colour                             |
+| `none`       | No highlight, just the icon change                                                     |
+
+`foreground` is the default because it is the only style that tracks the theme's accent colour. Three constraints
+combine to make a themed accent background impossible from an extension:
+
+1. The extension host allowlists exactly two status bar backgrounds, `statusBarItem.errorBackground` and
+   `statusBarItem.warningBackground`, and silently drops anything else.
+2. Colour customizations are parsed as literal hex values, so `statusBarItem.warningBackground` cannot be pointed at
+   another colour by identifier.
+3. There is no API for reading a resolved theme colour, so an extension cannot discover the accent value to write.
+
+If you prefer a filled item and are happy to pin a colour by hand, select `background` and override it for your theme:
+
+```json
+"workbench.colorCustomizations": {
+  "[Your Theme]": {
+    "statusBarItem.warningBackground": "#bd7ba2",
+    "statusBarItem.warningForeground": "#ffffff"
+  }
+}
+```
 
 ## Development
 

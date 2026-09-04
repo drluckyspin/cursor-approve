@@ -100,12 +100,13 @@ function startPolling(): void {
 	output.info(`Polling every ${interval}ms in '${currentMode()}' mode.`);
 }
 
-/**
- * The status bar API only accepts `statusBarItem.errorBackground` or
- * `statusBarItem.warningBackground` as a background, and overrides the
- * foreground whenever one is set. Tinting the foreground instead keeps the
- * active state legible while following whatever accent the theme defines.
- */
+type StatusBarStyle = "background" | "foreground" | "none";
+
+function statusBarStyle(): StatusBarStyle {
+	const style = config().get<string>("statusBarStyle", "foreground");
+	return style === "background" || style === "none" ? style : "foreground";
+}
+
 function activeColor(): string | vscode.ThemeColor | undefined {
 	const id = config().get<string>("activeColor", "textLink.foreground").trim();
 
@@ -114,6 +115,37 @@ function activeColor(): string | vscode.ThemeColor | undefined {
 	}
 
 	return id.startsWith("#") ? id : new vscode.ThemeColor(id);
+}
+
+/**
+ * The extension host allowlists exactly two status bar backgrounds,
+ * `statusBarItem.errorBackground` and `statusBarItem.warningBackground`, and
+ * forces the matching foreground whenever one is set. Colour customizations are
+ * parsed as literal hex, and there is no API to resolve a theme colour to a
+ * value, so a filled item can never track the theme accent. Tinting the
+ * foreground is the only style that follows it.
+ */
+function applyStatusBarStyle(enabled: boolean): void {
+	if (!enabled) {
+		statusBar.backgroundColor = undefined;
+		statusBar.color = undefined;
+		return;
+	}
+
+	switch (statusBarStyle()) {
+		case "background":
+			statusBar.backgroundColor = new vscode.ThemeColor("statusBarItem.warningBackground");
+			statusBar.color = undefined;
+			break;
+		case "foreground":
+			statusBar.backgroundColor = undefined;
+			statusBar.color = activeColor();
+			break;
+		case "none":
+			statusBar.backgroundColor = undefined;
+			statusBar.color = undefined;
+			break;
+	}
 }
 
 function updateStatusBar(): void {
@@ -127,7 +159,7 @@ function updateStatusBar(): void {
 	statusBar.tooltip = enabled
 		? `Automatically approving pending tool calls in '${currentMode()}' mode. Click to disable.`
 		: "Automatic approval is off. Click to enable.";
-	statusBar.color = enabled ? activeColor() : undefined;
+	applyStatusBarStyle(enabled);
 	statusBar.show();
 }
 
