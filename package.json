@@ -1,0 +1,113 @@
+{
+	"publisher": "drluckyspin",
+	"name": "cursor-approve",
+	"displayName": "Cursor Approve",
+	"description": "Automatically approves Cursor's pending agent tool calls by invoking Cursor's own approval command.",
+	"version": "0.1.0",
+	"author": {
+		"name": "Todd Papaioannou",
+		"email": "drluckyspin@gmail.com"
+	},
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/drluckyspin/cursor-approve"
+	},
+	"homepage": "https://github.com/drluckyspin/cursor-approve#readme",
+	"bugs": {
+		"url": "https://github.com/drluckyspin/cursor-approve/issues"
+	},
+	"engines": {
+		"vscode": "^1.90.0"
+	},
+	"categories": [
+		"Other"
+	],
+	"keywords": [
+		"cursor",
+		"agent",
+		"automation",
+		"approval"
+	],
+	"activationEvents": [
+		"onStartupFinished"
+	],
+	"main": "./out/extension.js",
+	"contributes": {
+		"commands": [
+			{
+				"command": "cursorApprove.toggle",
+				"title": "Toggle Automatic Approval",
+				"category": "Cursor Approve"
+			},
+			{
+				"command": "cursorApprove.approveOnce",
+				"title": "Approve Pending Tool Call Once",
+				"category": "Cursor Approve"
+			},
+			{
+				"command": "cursorApprove.diagnose",
+				"title": "Show Diagnostics",
+				"category": "Cursor Approve"
+			},
+			{
+				"command": "cursorApprove.listComposerCommands",
+				"title": "List Cursor Composer Commands",
+				"category": "Cursor Approve"
+			}
+		],
+		"configuration": {
+			"title": "Cursor Approve",
+			"properties": {
+				"cursorApprove.enabled": {
+					"type": "boolean",
+					"default": false,
+					"description": "Poll for pending agent tool calls and approve them automatically."
+				},
+				"cursorApprove.intervalMs": {
+					"type": "number",
+					"default": 1000,
+					"minimum": 250,
+					"maximum": 30000,
+					"description": "How often to check for a pending tool call, in milliseconds."
+				},
+				"cursorApprove.mode": {
+					"type": "string",
+					"enum": [
+						"run",
+						"allowlist"
+					],
+					"enumDescriptions": [
+						"Approve only the current call, equivalent to pressing Run.",
+						"Approve and remember the command, equivalent to pressing Always Run."
+					],
+					"default": "run",
+					"description": "Which of Cursor's approval commands to invoke."
+				},
+				"cursorApprove.onlyWhenFocused": {
+					"type": "boolean",
+					"default": false,
+					"description": "Only approve while this window has focus. Leave disabled for unattended operation."
+				},
+				"cursorApprove.showStatusBarItem": {
+					"type": "boolean",
+					"default": true,
+					"description": "Show a status bar item indicating whether automatic approval is active."
+				}
+			}
+		}
+	},
+	"scripts": {
+		"compile": "tsc -p ./",
+		"watch": "tsc -watch -p ./",
+		"lint": "tsc -p ./ --noEmit",
+		"vscode:prepublish": "npm run compile",
+		"package": "vsce package --no-dependencies"
+	},
+	"devDependencies": {
+		"@types/node": "^20.11.0",
+		"@types/vscode": "^1.90.0",
+		"@vscode/vsce": "^3.2.0",
+		"typescript": "^5.4.0"
+	}
+}
