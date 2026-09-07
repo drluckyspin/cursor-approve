@@ -1,0 +1,19 @@
+{
+  "lineWidth": 120,
+  "markdown": {
+    "lineWidth": 120,
+    "newLineKind": "lf",
+    "textWrap": "always"
+  },
+  "typescript": {
+    "useTabs": true,
+    "quoteStyle": "preferDouble",
+    "lineWidth": 120
+  },
+  "includes": ["**/*.{md,ts}"],
+  "excludes": ["**/node_modules/**", "**/out/**", "**/*.vsix"],
+  "plugins": [
+    "https://plugins.dprint.dev/markdown-0.22.1.wasm",
+    "https://plugins.dprint.dev/typescript-0.96.1.wasm"
+  ]
+}
