@@ -255,3 +255,9 @@ See [CHANGELOG.md](CHANGELOG.md) for details. Tagged releases:
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+<!-- markdownlint-disable MD013 MD033 -->
+<p align="center">
+  <a href="LICENSE.txt"><img alt="License: MIT" src="https://img.shields.io/static/v1.svg?style=for-the-badge&label=License&message=MIT&logoColor=d9e0ee&colorA=363a4f&colorB=b7bdf8"/></a>
+</p>
+<!-- markdownlint-enable MD013 MD033 -->
