@@ -70,7 +70,7 @@ help:
 	@echo ""
 	@$(LOGGER) log_info "Available make targets:"
 	@echo ""
-	@grep -E '^\.PHONY: .*?## .*$$' $(MAKEFILE_LIST) | sort | \
+	@grep -E '^\.PHONY: .*## .*$$' $(MAKEFILE_LIST) | sort | \
 		awk 'BEGIN {FS = ".PHONY: |## "}; {printf " %-22s$(RESET) $(DIM)- %s$(RESET)\n", $$2, $$3}'
 	@echo ""
 
