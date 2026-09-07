@@ -3,7 +3,7 @@
 	"name": "cursor-approve",
 	"displayName": "Cursor Approve",
 	"description": "Automatically approves Cursor's pending agent tool calls by invoking Cursor's own approval command.",
-	"version": "0.2.0",
+	"version": "0.3.0",
 	"author": {
 		"name": "Todd Papaioannou",
 		"email": "drluckyspin@gmail.com"
@@ -102,17 +102,17 @@
 						"none"
 					],
 					"enumDescriptions": [
-						"Fill the item using the theme's status bar warning colour.",
-						"Tint the text and icon with the theme's accent colour.",
-						"Use the default status bar colours with no highlight."
+						"Fill the item using the theme's status bar warning color.",
+						"Tint the text and icon with the theme's accent color.",
+						"Use the default status bar colors with no highlight."
 					],
 					"default": "foreground",
-					"markdownDescription": "How to highlight the status bar item while automatic approval is active.\n\n`foreground` is the default because it is the only style that follows the theme's accent colour. VS Code allowlists exactly two status bar backgrounds, `statusBarItem.warningBackground` and `statusBarItem.errorBackground`, and colour customizations must be literal hex values, so a filled item cannot track an arbitrary accent.\n\nChoose `background` for a filled item in your theme's warning colour. To recolour it, override that colour yourself:\n\n```json\n\"workbench.colorCustomizations\": {\n  \"statusBarItem.warningBackground\": \"#bd7ba2\",\n  \"statusBarItem.warningForeground\": \"#ffffff\"\n}\n```"
+					"markdownDescription": "How to highlight the status bar item while automatic approval is active.\n\n`foreground` is the default because it is the only style that follows the theme's accent color. VS Code allowlists exactly two status bar backgrounds, `statusBarItem.warningBackground` and `statusBarItem.errorBackground`, and color customizations must be literal hex values, so a filled item cannot track an arbitrary accent.\n\nChoose `background` for a filled item in your theme's warning color. To recolor it, override that color yourself:\n\n```json\n\"workbench.colorCustomizations\": {\n  \"statusBarItem.warningBackground\": \"#bd7ba2\",\n  \"statusBarItem.warningForeground\": \"#ffffff\"\n}\n```"
 				},
 				"cursorApprove.activeColor": {
 					"type": "string",
 					"default": "textLink.foreground",
-					"markdownDescription": "Colour used when `#cursorApprove.statusBarStyle#` is `foreground`. Accepts a [theme colour identifier](https://code.visualstudio.com/api/references/theme-color) such as `textLink.foreground`, which follows the current theme's accent, or a literal hex value such as `#bd7ba2`."
+					"markdownDescription": "Color used when `#cursorApprove.statusBarStyle#` is `foreground`. Accepts a [theme color identifier](https://code.visualstudio.com/api/references/theme-color) such as `textLink.foreground`, which follows the current theme's accent, or a literal hex value such as `#bd7ba2`."
 				}
 			}
 		}

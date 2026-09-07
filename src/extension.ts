@@ -1,27 +1,69 @@
+/**
+ * Cursor Approve — A Cursor extension.
+ *
+ * Polls Cursor's internal workbench commands to approve pending agent tool calls
+ * without simulating keystrokes or scraping the approval UI. Automatic approval is
+ * off by default; users toggle it via the status bar or settings.
+ *
+ * @see https://github.com/drluckyspin/cursor-approve
+ *
+ * Copyright (c) 2026 Todd Papaioannou
+ * SPDX-License-Identifier: MIT
+ */
+
 import * as vscode from "vscode";
 
+// ---------------------------------------------------------------------------
+// Cursor command surface
+// ---------------------------------------------------------------------------
+
 /**
- * Cursor registers these internally with `f1: true`, so they are ordinary
- * workbench commands that the extension host can invoke. Each is a no-op when
- * no tool call is awaiting a decision, which is what makes blind polling safe.
+ * Cursor registers approval actions as ordinary workbench commands (`f1: true`).
+ * The extension host can invoke them through `vscode.commands.executeCommand`.
+ *
+ * Each command early-returns when nothing is pending, which is why blind polling
+ * on a timer is safe — most ticks are genuine no-ops with no side effects.
+ *
+ * These identifiers are undocumented and may change between Cursor releases.
+ * Use `cursorApprove.listComposerCommands` after upgrading to confirm they still exist.
  */
 const APPROVE_COMMANDS = {
+	/** Approve the current call only — equivalent to pressing Run. */
 	run: "composer.approvePendingShellToolDecision",
+	/** Approve and remember the command — equivalent to pressing Always Run. */
 	allowlist: "composer.approvePendingShellToolDecisionAllowlist",
 } as const;
 
 type ApproveMode = keyof typeof APPROVE_COMMANDS;
 
+/** Prefix for every `contributes.configuration` key in package.json. */
 const SECTION = "cursorApprove";
+
+// ---------------------------------------------------------------------------
+// Module state (initialized in activate)
+// ---------------------------------------------------------------------------
 
 let output: vscode.LogOutputChannel;
 let statusBar: vscode.StatusBarItem;
+
+/** `setInterval` handle for the approval poll loop; undefined when disarmed. */
 let timer: ReturnType<typeof setInterval> | undefined;
 
+/** Total poll ticks since activation — includes no-op ticks when nothing is pending. */
 let pollCount = 0;
+
+/** Consecutive `executeCommand` failures; resets when the user re-enables approval. */
 let errorCount = 0;
+
+/** Message from the most recent failed approval attempt, for diagnostics. */
 let lastError: string | undefined;
+
+/** Cached result of the last `checkCommandAvailability` call. */
 let commandAvailable: boolean | undefined;
+
+// ---------------------------------------------------------------------------
+// Settings helpers
+// ---------------------------------------------------------------------------
 
 function config(): vscode.WorkspaceConfiguration {
 	return vscode.workspace.getConfiguration(SECTION);
@@ -35,10 +77,16 @@ function isEnabled(): boolean {
 	return config().get<boolean>("enabled", false);
 }
 
+// ---------------------------------------------------------------------------
+// Approval
+// ---------------------------------------------------------------------------
+
 /**
- * Cursor's approval commands are not part of the public API, so a build that
- * renames or drops them should degrade to a clear warning rather than a silent
- * no-op loop.
+ * Verify that Cursor has registered the primary approval command.
+ *
+ * Stock VS Code does not expose `composer.*` commands, so this is the earliest
+ * signal that the extension is running in the wrong host. We warn once rather
+ * than silently polling a command that will never exist.
  */
 async function checkCommandAvailability(): Promise<boolean> {
 	const all = await vscode.commands.getCommands(true);
@@ -53,6 +101,12 @@ async function checkCommandAvailability(): Promise<boolean> {
 	return commandAvailable;
 }
 
+/**
+ * Invoke the configured approval command once.
+ *
+ * @param reason - Shown in debug logs (`poll`, `manual`, etc.) to distinguish
+ *   timer-driven calls from explicit user actions.
+ */
 async function approveOnce(reason: string): Promise<void> {
 	const command = APPROVE_COMMANDS[currentMode()];
 
@@ -64,7 +118,7 @@ async function approveOnce(reason: string): Promise<void> {
 		lastError = error instanceof Error ? error.message : String(error);
 		output.error(`Failed to invoke ${command}: ${lastError}`);
 
-		// A command that reliably throws will never start working; stop rather
+		// A command that reliably throws will never start working; disarm rather
 		// than log an identical failure on every interval.
 		if (errorCount >= 3 && timer) {
 			output.error("Disabling automatic approval after repeated failures.");
@@ -76,6 +130,10 @@ async function approveOnce(reason: string): Promise<void> {
 	}
 }
 
+/**
+ * Single poll-cycle callback. Skipped entirely when `onlyWhenFocused` is set and
+ * this window does not have focus.
+ */
 async function tick(): Promise<void> {
 	if (config().get<boolean>("onlyWhenFocused", false) && !vscode.window.state.focused) {
 		return;
@@ -92,6 +150,7 @@ function stopPolling(): void {
 	}
 }
 
+/** (Re)start the poll loop using the current `intervalMs` setting. */
 function startPolling(): void {
 	stopPolling();
 
@@ -100,6 +159,10 @@ function startPolling(): void {
 	output.info(`Polling every ${interval}ms in '${currentMode()}' mode.`);
 }
 
+// ---------------------------------------------------------------------------
+// Status bar
+// ---------------------------------------------------------------------------
+
 type StatusBarStyle = "background" | "foreground" | "none";
 
 function statusBarStyle(): StatusBarStyle {
@@ -107,6 +170,10 @@ function statusBarStyle(): StatusBarStyle {
 	return style === "background" || style === "none" ? style : "foreground";
 }
 
+/**
+ * Resolve `cursorApprove.activeColor` to either a literal hex or a theme token.
+ * An empty string disables the foreground tint.
+ */
 function activeColor(): string | vscode.ThemeColor | undefined {
 	const id = config().get<string>("activeColor", "textLink.foreground").trim();
 
@@ -118,12 +185,14 @@ function activeColor(): string | vscode.ThemeColor | undefined {
 }
 
 /**
- * The extension host allowlists exactly two status bar backgrounds,
- * `statusBarItem.errorBackground` and `statusBarItem.warningBackground`, and
- * forces the matching foreground whenever one is set. Colour customizations are
- * parsed as literal hex, and there is no API to resolve a theme colour to a
+ * Apply highlight styling while automatic approval is armed.
+ *
+ * The extension host allowlists exactly two status bar backgrounds
+ * (`statusBarItem.errorBackground` and `statusBarItem.warningBackground`) and
+ * forces the matching foreground whenever one is set. Color customizations are
+ * parsed as literal hex, and there is no API to resolve a theme color to a
  * value, so a filled item can never track the theme accent. Tinting the
- * foreground is the only style that follows it.
+ * foreground via `textLink.foreground` is the only style that follows it.
  */
 function applyStatusBarStyle(enabled: boolean): void {
 	if (!enabled) {
@@ -148,6 +217,7 @@ function applyStatusBarStyle(enabled: boolean): void {
 	}
 }
 
+/** Sync status bar text, tooltip, and highlight with the current enabled state. */
 function updateStatusBar(): void {
 	if (!config().get<boolean>("showStatusBarItem", true)) {
 		statusBar.hide();
@@ -163,6 +233,10 @@ function updateStatusBar(): void {
 	statusBar.show();
 }
 
+/**
+ * React to any settings change under `cursorApprove.*` — start or stop polling
+ * and refresh the status bar.
+ */
 function applyConfiguration(): void {
 	if (isEnabled()) {
 		startPolling();
@@ -174,6 +248,30 @@ function applyConfiguration(): void {
 	updateStatusBar();
 }
 
+/**
+ * Open the Output panel with this extension's channel selected.
+ *
+ * `output.show()` alone is unreliable when invoked from the command palette
+ * because focus returns to the editor as the palette closes.
+ */
+function revealOutput(): void {
+	setTimeout(() => {
+		void vscode.commands.executeCommand("workbench.panel.output.focus");
+		output.show(false);
+	}, 0);
+}
+
+// ---------------------------------------------------------------------------
+// Extension lifecycle
+// ---------------------------------------------------------------------------
+
+/**
+ * Called when the extension is activated (`onStartupFinished`).
+ *
+ * Registers commands, wires the status bar toggle, and applies the user's
+ * current settings. Does not enable automatic approval unless
+ * `cursorApprove.enabled` is already true.
+ */
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
 	output = vscode.window.createOutputChannel("Cursor Approve", { log: true });
 	statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
@@ -197,12 +295,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 				2000,
 			);
 		}),
-
 		vscode.commands.registerCommand("cursorApprove.approveOnce", async () => {
 			await approveOnce("manual");
 			void vscode.window.setStatusBarMessage("Cursor Approve: sent approval", 2000);
 		}),
-
 		vscode.commands.registerCommand("cursorApprove.diagnose", async () => {
 			const available = await checkCommandAvailability();
 
@@ -221,11 +317,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			output.info("Cursor's command is silent when nothing is pending, so poll");
 			output.info("count is not a count of actual approvals.");
 			output.info("--- end diagnostics ---");
-			output.show();
+			revealOutput();
 		}),
-
 		// Discovery helper: Cursor's composer commands are undocumented, and
-		// this is how the approval commands above were found in the first place.
+		// this is how the approval command IDs above were found in the first place.
 		vscode.commands.registerCommand("cursorApprove.listComposerCommands", async () => {
 			const all = await vscode.commands.getCommands(true);
 			const composer = all.filter((c) => c.startsWith("composer.")).sort();
@@ -235,9 +330,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 				output.info(command);
 			}
 			output.info("--- end ---");
-			output.show();
+			revealOutput();
 		}),
-
 		vscode.workspace.onDidChangeConfiguration((event) => {
 			if (event.affectsConfiguration(SECTION)) {
 				applyConfiguration();
@@ -248,6 +342,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	applyConfiguration();
 }
 
+/** Tear down the poll loop when the extension host shuts down. */
 export function deactivate(): void {
 	stopPolling();
 }
