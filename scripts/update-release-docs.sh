@@ -137,32 +137,42 @@ if grep -q "releases/tag/v${VERSION}" "$README"; then
 	log_indent log_info_dim "README already links v$VERSION release"
 else
 	awk -v tag_link="$tag_link" '
-		/^See \[CHANGELOG\.md\]\(CHANGELOG\.md\) for details\. Published releases:/ {
+		/separate release\): \[v/ {
+			if (index($0, tag_link) == 0) {
+				sub(/separate release\): /, "separate release): " tag_link ", ")
+			}
 			print
-			got_links = 0
-			while (getline > 0) {
+			next
+		}
+		/Published GitHub releases/ || /^See \[CHANGELOG\.md\].*Published releases/ {
+			print
+			if (getline > 0) {
 				if ($0 ~ /^\[v/) {
-					if (!got_links) {
-						print tag_link ", " $0
-						got_links = 1
-					} else {
-						print
-					}
-				} else {
-					if (!got_links) {
-						print tag_link "."
-					}
+					print tag_link ", " $0
+				} else if ($0 ~ /separate release\): \[v/ && index($0, tag_link) == 0) {
+					sub(/separate release\): /, "separate release): " tag_link ", ")
 					print
-					break
+				} else {
+					print tag_link "."
+					print
 				}
+				while (getline > 0) {
+					print
+				}
+			} else {
+				print tag_link "."
 			}
 			next
 		}
 		{ print }
 	' "$README" > "$README.tmp"
 	mv "$README.tmp" "$README"
-	readme_updated=true
-	log_indent log_success "Added README link for v$VERSION release"
+	if grep -q "releases/tag/v${VERSION}" "$README"; then
+		readme_updated=true
+		log_indent log_success "Added README link for v$VERSION release"
+	else
+		log_indent log_warning "Could not update README published release links"
+	fi
 fi
 
 if [[ "$changelog_updated" == false && "$readme_updated" == false ]]; then

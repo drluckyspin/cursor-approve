@@ -69,9 +69,7 @@ jobs:
           bash scripts/update-release-docs.sh "$VERSION" "$release_date"
 
       - name: Format documentation
-        run: |
-          curl -fsSL https://dprint.dev/install.sh | sh -s -- -y
-          dprint fmt --config dprint.json CHANGELOG.md README.md
+        run: npx --yes dprint@0.49.1 fmt --config dprint.json CHANGELOG.md README.md
 
       - name: Commit documentation updates
         run: |

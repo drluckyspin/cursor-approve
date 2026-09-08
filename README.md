@@ -245,14 +245,16 @@ Run `make bump-version X.Y.Z` to update `VERSION`, synchronize the extension man
 
 ## Release history
 
-| Extension | Notes                                                           |
-| --------- | --------------------------------------------------------------- |
-| 0.3.0     | Hardening, development tooling, diagnostics, and refreshed docs |
-| 0.2.0     | Theme-accent status bar, `statusBarStyle` setting               |
-| 0.1.0     | Initial release — polling, toggle, diagnostics                  |
+| Extension | Notes                                                                         |
+| --------- | ----------------------------------------------------------------------------- |
+| 0.3.1     | Extension icon (`logo512.png`) in the marketplace manifest and README header. |
+| 0.3.0     | Hardening, development tooling, diagnostics, and refreshed docs               |
+| 0.2.0     | Theme-accent status bar, `statusBarStyle` setting                             |
+| 0.1.0     | Initial release — polling, toggle, diagnostics                                |
 
 See [CHANGELOG.md](CHANGELOG.md) for the full version history. Published GitHub releases (not every table row has a
-separate release): [v0.1.0](https://github.com/drluckyspin/cursor-approve/releases/tag/v0.1.0) and
+separate release): [v0.3.1](https://github.com/drluckyspin/cursor-approve/releases/tag/v0.3.1),
+[v0.1.0](https://github.com/drluckyspin/cursor-approve/releases/tag/v0.1.0) and
 [v0.3.0](https://github.com/drluckyspin/cursor-approve/releases/tag/v0.3.0).
 
 ## License
