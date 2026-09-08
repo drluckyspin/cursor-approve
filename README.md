@@ -42,7 +42,7 @@ A status bar toggle shows whether automatic approval is armed. Click it, use the
 Install the latest `.vsix` from [Releases](https://github.com/drluckyspin/cursor-approve/releases), then:
 
 ```bash
-cursor --install-extension cursor-approve-0.3.0.vsix
+cursor --install-extension cursor-approve-0.3.1.vsix
 ```
 
 Reload the window (`Cmd+Shift+P` → **Developer: Reload Window**), then click **Auto Approve** in the status bar or run
@@ -234,7 +234,7 @@ make check
 make build      # install npm dependencies, then compile
 make lint
 make fmt
-make package    # build cursor-approve-0.3.0.vsix
+make package    # build cursor-approve-0.3.1.vsix
 make install    # package and install the VSIX into Cursor
 ```
 
