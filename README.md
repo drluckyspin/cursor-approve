@@ -1,4 +1,8 @@
-# Cursor Approve
+<!-- markdownlint-disable MD033 -->
+
+# <img src="logo512.png" width="48" alt="Cursor Approve logo" /> Cursor Approve
+
+<!-- markdownlint-enable MD033 -->
 
 Cursor Approve is a [Cursor](https://cursor.com/) extension that automatically approves an agent's pending tool calls,
 so long-running agent sessions do not stall waiting for you to click **Run**.
