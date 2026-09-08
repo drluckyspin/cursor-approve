@@ -5,6 +5,19 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Extension icon (`logo512.png`) in the marketplace manifest and README header.
+- GitHub Actions release workflow to build and upload a VSIX when a release is published.
+- Automated CHANGELOG and README release history updates when a GitHub release is published.
+
+### Changed
+
+- `make bump-version` accepts the target version as an argument.
+- `make install` packages the extension and installs it through the Cursor CLI.
+
 ## [0.3.0] - 2026-09-07
 
 ### Added

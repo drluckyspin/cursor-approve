@@ -90,24 +90,27 @@ Useful verification commands in the Extension Development Host:
 
 ## Version and Release
 
-| File           | Role                                                    |
-| -------------- | ------------------------------------------------------- |
-| `VERSION`      | Source of truth for the extension version               |
-| `package.json` | Synced by `make bump-version`                           |
-| `README.md`    | VSIX install examples are synced by `make bump-version` |
-| `CHANGELOG.md` | Manual release notes; update for each release           |
+| File           | Role                                                                                   |
+| -------------- | -------------------------------------------------------------------------------------- |
+| `VERSION`      | Source of truth for the extension version                                              |
+| `package.json` | Synced by `make bump-version`                                                          |
+| `README.md`    | VSIX install examples synced by `make bump-version`; release history synced on publish |
+| `CHANGELOG.md` | `[Unreleased]` during development; finalized by the release workflow on publish        |
 
 Use `make bump-version X.Y.Z` to update `VERSION` and synchronize the other version files. The release workflow is:
 
 ```bash
+# Document changes under ## [Unreleased] in CHANGELOG.md while developing.
 make bump-version X.Y.Z
 make lint
 make fmt-check
 make package
+# Tag vX.Y.Z, create the GitHub release, then publish it.
 ```
 
-Before finishing a release, verify published versions on GitHub and update both `CHANGELOG.md` and README's release
-history. Do not list a release until its GitHub release exists. Tag and push only when explicitly requested.
+Publishing a GitHub release runs `.github/workflows/release.yml`, which uploads the VSIX and commits finalized
+`CHANGELOG.md` and README release history to `main`. Do not list a version in README's release history until it is
+published. Tag and push only when explicitly requested.
 
 ## Agent Guidelines
 

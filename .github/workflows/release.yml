@@ -10,6 +10,8 @@ permissions:
 jobs:
   package:
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.verify.outputs.version }}
     steps:
       # Build exactly the source that the GitHub Release's tag identifies.
       - uses: actions/checkout@v6
@@ -23,6 +25,7 @@ jobs:
 
       # A tag must identify the same version declared by the extension manifest.
       - name: Verify release version
+        id: verify
         env:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
@@ -32,7 +35,7 @@ jobs:
             echo "Release tag '$RELEASE_TAG' does not match package.json version '$package_version'."
             exit 1
           fi
-          echo "PACKAGE_VERSION=$package_version" >> "$GITHUB_ENV"
+          echo "version=$package_version" >> "$GITHUB_OUTPUT"
 
       - run: npm ci
 
@@ -47,4 +50,37 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
-        run: gh release upload "$RELEASE_TAG" "cursor-approve-${PACKAGE_VERSION}.vsix" --clobber
+        run: gh release upload "$RELEASE_TAG" "cursor-approve-${{ steps.verify.outputs.version }}.vsix" --clobber
+
+  update-docs:
+    needs: package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+
+      - name: Update release documentation
+        env:
+          VERSION: ${{ needs.package.outputs.version }}
+          RELEASE_BODY: ${{ github.event.release.body }}
+        run: |
+          release_date="$(date -u -d "${{ github.event.release.published_at }}" +%Y-%m-%d)"
+          bash scripts/update-release-docs.sh "$VERSION" "$release_date"
+
+      - name: Format documentation
+        run: |
+          curl -fsSL https://dprint.dev/install.sh | sh -s -- -y
+          dprint fmt --config dprint.json CHANGELOG.md README.md
+
+      - name: Commit documentation updates
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add CHANGELOG.md README.md
+          if git diff --staged --quiet; then
+            echo "No documentation changes needed"
+            exit 0
+          fi
+          git commit -m "docs: update CHANGELOG and README for v${{ needs.package.outputs.version }}"
+          git push
