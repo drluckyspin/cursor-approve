@@ -44,15 +44,15 @@ exist.
 
 ## Tech Stack
 
-| Item                   | Value                                   |
-| ---------------------- | --------------------------------------- |
-| Language               | TypeScript                              |
-| Runtime API            | VS Code extension API (`@types/vscode`) |
-| Host                   | Cursor only                             |
-| Build                  | `tsc` to `out/`, then `vsce package`    |
-| Formatting             | dprint using the project `dprint.json`  |
-| Script logging         | `scripts/log.bash`                      |
-| Development entrypoint | `make`                                  |
+| Item                   | Value                                               |
+| ---------------------- | --------------------------------------------------- |
+| Language               | TypeScript                                          |
+| Runtime API            | VS Code extension API (`@types/vscode`)             |
+| Host                   | Cursor only                                         |
+| Build                  | `npm install`, `tsc` to `out/`, then `vsce package` |
+| Formatting             | dprint using the project `dprint.json`              |
+| Script logging         | `scripts/log.bash`                                  |
+| Development entrypoint | `make`                                              |
 
 ## Development Commands
 
@@ -79,8 +79,7 @@ Set `VERBOSE=true` to retain unfiltered output from Makefile commands that use `
 1. Open this repository in Cursor and press **F5** to open a second Cursor window: **Extension Development Host**.
 2. Test the extension in that dev-host window, not in the original editor window.
 3. After source changes, run **Developer: Reload Window** in the dev host or stop and launch F5 again.
-4. To test the packaged build, run `make package`, install the resulting `.vsix` with the Cursor CLI, and reload the
-   regular Cursor window.
+4. To test the packaged build, run `make install`, then reload the regular Cursor window.
 
 Useful verification commands in the Extension Development Host:
 
@@ -91,24 +90,27 @@ Useful verification commands in the Extension Development Host:
 
 ## Version and Release
 
-| File           | Role                                                    |
-| -------------- | ------------------------------------------------------- |
-| `VERSION`      | Source of truth for the extension version               |
-| `package.json` | Synced by `make bump-version`                           |
-| `README.md`    | VSIX install examples are synced by `make bump-version` |
-| `CHANGELOG.md` | Manual release notes; update for each release           |
+| File           | Role                                                                                   |
+| -------------- | -------------------------------------------------------------------------------------- |
+| `VERSION`      | Source of truth for the extension version                                              |
+| `package.json` | Synced by `make bump-version` (including `package-lock.json`)                          |
+| `README.md`    | VSIX install examples synced by `make bump-version`; release history synced on publish |
+| `CHANGELOG.md` | `[Unreleased]` during development; finalized by the release workflow on publish        |
 
-After editing `VERSION`, always run `make bump-version`. The release workflow is:
+Use `make bump-version X.Y.Z` to update `VERSION` and synchronize the other version files. The release workflow is:
 
 ```bash
-echo "X.Y.Z" > VERSION
-make bump-version
+# Document changes under ## [Unreleased] in CHANGELOG.md while developing.
+make bump-version X.Y.Z
 make lint
 make fmt-check
 make package
+# Tag vX.Y.Z, create the GitHub release, then publish it.
 ```
 
-Update `CHANGELOG.md`, tag the release, and push only when explicitly requested.
+Publishing a GitHub release runs `.github/workflows/release.yml`, which uploads the VSIX and commits finalized
+`CHANGELOG.md` and README release history to `main`. Do not list a version in README's release history until it is
+published. Tag and push only when explicitly requested.
 
 ## Agent Guidelines
 
@@ -118,6 +120,8 @@ Update `CHANGELOG.md`, tag the release, and push only when explicitly requested.
 - Run `make lint` and `make fmt-check` before finishing substantive changes.
 - For Markdown, run dprint with `~/.config/dprint/dprint.json`; use aligned GFM tables and language-tagged code fences.
 - Source `scripts/log.bash` in new Bash scripts instead of recreating logging helpers.
+- Comment all code clearly enough to explain its purpose, non-obvious decisions, and safety-relevant behavior. Include a
+  comment header in all files.
 - Keep changes minimal, focused, and consistent with existing TypeScript style: tabs and double quotes.
 - Test extension behavior in the Extension Development Host.
 

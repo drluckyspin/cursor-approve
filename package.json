@@ -3,7 +3,8 @@
 	"name": "cursor-approve",
 	"displayName": "Cursor Approve",
 	"description": "Automatically approves Cursor's pending agent tool calls by invoking Cursor's own approval command.",
-	"version": "0.3.0",
+	"icon": "logo512.png",
+	"version": "0.3.1",
 	"author": {
 		"name": "Todd Papaioannou",
 		"email": "drluckyspin@gmail.com"

@@ -1,4 +1,8 @@
-# Cursor Approve
+<!-- markdownlint-disable MD033 -->
+
+# <img src="logo512.png" width="48" alt="Cursor Approve logo" /> Cursor Approve
+
+<!-- markdownlint-enable MD033 -->
 
 Cursor Approve is a [Cursor](https://cursor.com/) extension that automatically approves an agent's pending tool calls,
 so long-running agent sessions do not stall waiting for you to click **Run**.
@@ -38,7 +42,7 @@ A status bar toggle shows whether automatic approval is armed. Click it, use the
 Install the latest `.vsix` from [Releases](https://github.com/drluckyspin/cursor-approve/releases), then:
 
 ```bash
-cursor --install-extension cursor-approve-0.3.0.vsix
+cursor --install-extension cursor-approve-0.3.1.vsix
 ```
 
 Reload the window (`Cmd+Shift+P` → **Developer: Reload Window**), then click **Auto Approve** in the status bar or run
@@ -54,8 +58,6 @@ git clone https://github.com/drluckyspin/cursor-approve.git
 cd cursor-approve
 make check
 make install
-make package
-cursor --install-extension cursor-approve-0.3.0.vsix
 ```
 
 ## Usage
@@ -229,28 +231,29 @@ Run the following from the repository root:
 
 ```bash
 make check
-make install
-make build
+make build      # install npm dependencies, then compile
 make lint
 make fmt
-make package    # build cursor-approve-0.3.0.vsix
+make package    # build cursor-approve-0.3.1.vsix
+make install    # package and install the VSIX into Cursor
 ```
 
 Open the folder in Cursor and press `F5` to launch an Extension Development Host with the extension loaded. Test
 commands in that second window, then use **Developer: Reload Window** there after source changes.
 
-Edit `VERSION` and run `make bump-version` to synchronize the extension manifest and `.vsix` install example.
+Run `make bump-version X.Y.Z` to update `VERSION`, synchronize the extension manifest and `.vsix` install example.
 
 ## Release history
 
-| Extension | Notes                                             |
-| --------- | ------------------------------------------------- |
-| 0.2.0     | Theme-accent status bar, `statusBarStyle` setting |
-| 0.1.0     | Initial release — polling, toggle, diagnostics    |
+| Extension | Notes                                                           |
+| --------- | --------------------------------------------------------------- |
+| 0.3.0     | Hardening, development tooling, diagnostics, and refreshed docs |
+| 0.2.0     | Theme-accent status bar, `statusBarStyle` setting               |
+| 0.1.0     | Initial release — polling, toggle, diagnostics                  |
 
-See [CHANGELOG.md](CHANGELOG.md) for details. Tagged releases:
-[v0.1.0](https://github.com/drluckyspin/cursor-approve/releases/tag/v0.1.0),
-[v0.2.0](https://github.com/drluckyspin/cursor-approve/releases/tag/v0.2.0).
+See [CHANGELOG.md](CHANGELOG.md) for the full version history. Published GitHub releases (not every table row has a
+separate release): [v0.1.0](https://github.com/drluckyspin/cursor-approve/releases/tag/v0.1.0) and
+[v0.3.0](https://github.com/drluckyspin/cursor-approve/releases/tag/v0.3.0).
 
 ## License
 

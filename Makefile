@@ -19,12 +19,37 @@ SHELL := /bin/bash
 # Resolve paths from this Makefile so targets work from any current directory.
 MAKEFILE_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 LOGGER := source "$(MAKEFILE_DIR)scripts/log.bash" &&
+# vsce names the VSIX from package.json, so derive the install path from the manifest.
+EXTENSION_VERSION := $(shell cd "$(MAKEFILE_DIR)" && node -p "require('./package.json').version")
+VSIX := $(MAKEFILE_DIR)cursor-approve-$(EXTENSION_VERSION).vsix
 RESET := \033[0m
 DIM := \033[2m
+
+# Treat the version after `make bump-version` as an argument rather than a target.
+ifeq ($(firstword $(MAKECMDGOALS)),bump-version)
+BUMP_VERSION := $(word 2,$(MAKECMDGOALS))
+BUMP_EXTRA_GOALS := $(wordlist 3,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))
+
+ifneq ($(BUMP_EXTRA_GOALS),)
+$(error Usage: make bump-version [X.Y.Z])
+endif
+
+ifneq ($(BUMP_VERSION),)
+.PHONY: $(BUMP_VERSION)
+$(BUMP_VERSION):
+	@:
+endif
+endif
 
 # Internal dependency checks stay out of `make help`.
 check_deps:
 	@$(MAKE) --no-print-directory check_node check_npm check_dprint check_cursor
+
+# Install npm dependencies before compiling.
+install_dependencies:
+	@$(LOGGER) log_target "Installing npm dependencies"
+	@set -o pipefail; $(LOGGER) log_run_dim npm install
+	@$(LOGGER) log_success "Dependencies installed"
 
 # Verify required development tools and print their versions on success.
 check_node:
@@ -74,24 +99,17 @@ help:
 		awk 'BEGIN {FS = ".PHONY: |## "}; {printf " %-22s$(RESET) $(DIM)- %s$(RESET)\n", $$2, $$3}'
 	@echo ""
 
-# Check all command-line dependencies before installing packages.
+# Check all required command-line dependencies.
 .PHONY: check ## Verify all developer dependencies
 check:
 	@$(LOGGER) log_target "Checking developer dependencies"
 	@$(MAKE) --no-print-directory check_deps
 	@$(LOGGER) log_success "All dependencies OK"
 
-# Install JavaScript dependencies from package.json.
-.PHONY: install ## Install npm dependencies
-install: check
-	@$(LOGGER) log_target "Installing npm dependencies"
-	@set -o pipefail; $(LOGGER) log_run_dim npm install
-	@$(LOGGER) log_success "Dependencies installed"
-
-# Compile TypeScript into out/.
+# Install dependencies, then compile TypeScript into out/.
 .PHONY: build ## Compile the TypeScript extension
-build:
-	@$(LOGGER) log_target "Compiling TypeScript"
+build: install_dependencies
+	@$(LOGGER) log_target "Compiling TypeScript extension"
 	@set -o pipefail; $(LOGGER) log_run_dim npm run compile
 	@$(LOGGER) log_success "Build complete"
 
@@ -123,12 +141,26 @@ package: build
 	@set -o pipefail; $(LOGGER) log_run_dim npm run package
 	@$(LOGGER) log_success "Package complete"
 
+# Package the extension, then install its VSIX through the Cursor CLI.
+.PHONY: install ## Install the packaged extension into Cursor
+install: check_cursor package
+	@$(LOGGER) log_target "Installing Cursor Approve"
+	@set -o pipefail; $(LOGGER) log_run_dim cursor --install-extension "$(VSIX)"
+	@$(LOGGER) log_success "Extension installed"
+
 # Synchronize the VERSION file with files that expose the extension version.
 .PHONY: bump-version ## Sync VERSION into package.json and README
 bump-version:
 	@$(LOGGER) log_target "Syncing version"
-	@bash "$(MAKEFILE_DIR)scripts/bump-version.sh"
+	@bash "$(MAKEFILE_DIR)scripts/bump-version.sh" $(if $(BUMP_VERSION),"$(BUMP_VERSION)")
 	@$(LOGGER) log_success "Version bump complete"
+
+# Finalize CHANGELOG and README release history for a published version (also run by release.yml).
+.PHONY: update-release-docs ## Finalize CHANGELOG and README for VERSION
+update-release-docs:
+	@$(LOGGER) log_target "Updating release documentation"
+	@bash "$(MAKEFILE_DIR)scripts/update-release-docs.sh" "$(EXTENSION_VERSION)" "$(or $(RELEASE_DATE),$(shell date -u +%Y-%m-%d))"
+	@$(LOGGER) log_success "Release documentation updated"
 
 # Remove generated extension output and VSIX archives.
 .PHONY: clean ## Remove build artifacts
