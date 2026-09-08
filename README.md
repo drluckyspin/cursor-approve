@@ -38,7 +38,7 @@ A status bar toggle shows whether automatic approval is armed. Click it, use the
 Install the latest `.vsix` from [Releases](https://github.com/drluckyspin/cursor-approve/releases), then:
 
 ```bash
-cursor --install-extension cursor-approve-0.3.0.vsix
+cursor --install-extension cursor-approve-0.3.1.vsix
 ```
 
 Reload the window (`Cmd+Shift+P` → **Developer: Reload Window**), then click **Auto Approve** in the status bar or run
@@ -230,14 +230,14 @@ make check
 make build      # install npm dependencies, then compile
 make lint
 make fmt
-make package    # build cursor-approve-0.3.0.vsix
+make package    # build cursor-approve-0.3.1.vsix
 make install    # package and install the VSIX into Cursor
 ```
 
 Open the folder in Cursor and press `F5` to launch an Extension Development Host with the extension loaded. Test
 commands in that second window, then use **Developer: Reload Window** there after source changes.
 
-Edit `VERSION` and run `make bump-version` to synchronize the extension manifest and `.vsix` install example.
+Run `make bump-version X.Y.Z` to update `VERSION`, synchronize the extension manifest and `.vsix` install example.
 
 ## Release history
 

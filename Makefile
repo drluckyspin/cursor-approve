@@ -24,6 +24,22 @@ VSIX := $(MAKEFILE_DIR)cursor-approve-$(EXTENSION_VERSION).vsix
 RESET := \033[0m
 DIM := \033[2m
 
+# Treat the version after `make bump-version` as an argument rather than a target.
+ifeq ($(firstword $(MAKECMDGOALS)),bump-version)
+BUMP_VERSION := $(word 2,$(MAKECMDGOALS))
+BUMP_EXTRA_GOALS := $(wordlist 3,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))
+
+ifneq ($(BUMP_EXTRA_GOALS),)
+$(error Usage: make bump-version [X.Y.Z])
+endif
+
+ifneq ($(BUMP_VERSION),)
+.PHONY: $(BUMP_VERSION)
+$(BUMP_VERSION):
+	@:
+endif
+endif
+
 # Internal dependency checks stay out of `make help`.
 check_deps:
 	@$(MAKE) --no-print-directory check_node check_npm check_dprint check_cursor
@@ -135,7 +151,7 @@ install: check_cursor package
 .PHONY: bump-version ## Sync VERSION into package.json and README
 bump-version:
 	@$(LOGGER) log_target "Syncing version"
-	@bash "$(MAKEFILE_DIR)scripts/bump-version.sh"
+	@bash "$(MAKEFILE_DIR)scripts/bump-version.sh" $(if $(BUMP_VERSION),"$(BUMP_VERSION)")
 	@$(LOGGER) log_success "Version bump complete"
 
 # Remove generated extension output and VSIX archives.

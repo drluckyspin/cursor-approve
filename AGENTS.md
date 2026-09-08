@@ -97,11 +97,10 @@ Useful verification commands in the Extension Development Host:
 | `README.md`    | VSIX install examples are synced by `make bump-version` |
 | `CHANGELOG.md` | Manual release notes; update for each release           |
 
-After editing `VERSION`, always run `make bump-version`. The release workflow is:
+Use `make bump-version X.Y.Z` to update `VERSION` and synchronize the other version files. The release workflow is:
 
 ```bash
-echo "X.Y.Z" > VERSION
-make bump-version
+make bump-version X.Y.Z
 make lint
 make fmt-check
 make package
