@@ -44,15 +44,15 @@ exist.
 
 ## Tech Stack
 
-| Item                   | Value                                   |
-| ---------------------- | --------------------------------------- |
-| Language               | TypeScript                              |
-| Runtime API            | VS Code extension API (`@types/vscode`) |
-| Host                   | Cursor only                             |
-| Build                  | `tsc` to `out/`, then `vsce package`    |
-| Formatting             | dprint using the project `dprint.json`  |
-| Script logging         | `scripts/log.bash`                      |
-| Development entrypoint | `make`                                  |
+| Item                   | Value                                               |
+| ---------------------- | --------------------------------------------------- |
+| Language               | TypeScript                                          |
+| Runtime API            | VS Code extension API (`@types/vscode`)             |
+| Host                   | Cursor only                                         |
+| Build                  | `npm install`, `tsc` to `out/`, then `vsce package` |
+| Formatting             | dprint using the project `dprint.json`              |
+| Script logging         | `scripts/log.bash`                                  |
+| Development entrypoint | `make`                                              |
 
 ## Development Commands
 
@@ -79,8 +79,7 @@ Set `VERBOSE=true` to retain unfiltered output from Makefile commands that use `
 1. Open this repository in Cursor and press **F5** to open a second Cursor window: **Extension Development Host**.
 2. Test the extension in that dev-host window, not in the original editor window.
 3. After source changes, run **Developer: Reload Window** in the dev host or stop and launch F5 again.
-4. To test the packaged build, run `make package`, install the resulting `.vsix` with the Cursor CLI, and reload the
-   regular Cursor window.
+4. To test the packaged build, run `make install`, then reload the regular Cursor window.
 
 Useful verification commands in the Extension Development Host:
 

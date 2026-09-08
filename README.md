@@ -54,8 +54,6 @@ git clone https://github.com/drluckyspin/cursor-approve.git
 cd cursor-approve
 make check
 make install
-make package
-cursor --install-extension cursor-approve-0.3.0.vsix
 ```
 
 ## Usage
@@ -229,11 +227,11 @@ Run the following from the repository root:
 
 ```bash
 make check
-make install
-make build
+make build      # install npm dependencies, then compile
 make lint
 make fmt
 make package    # build cursor-approve-0.3.0.vsix
+make install    # package and install the VSIX into Cursor
 ```
 
 Open the folder in Cursor and press `F5` to launch an Extension Development Host with the extension loaded. Test

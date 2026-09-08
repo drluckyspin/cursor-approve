@@ -19,12 +19,20 @@ SHELL := /bin/bash
 # Resolve paths from this Makefile so targets work from any current directory.
 MAKEFILE_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 LOGGER := source "$(MAKEFILE_DIR)scripts/log.bash" &&
+EXTENSION_VERSION := $(shell tr -d ' \n\r' < "$(MAKEFILE_DIR)VERSION")
+VSIX := $(MAKEFILE_DIR)cursor-approve-$(EXTENSION_VERSION).vsix
 RESET := \033[0m
 DIM := \033[2m
 
 # Internal dependency checks stay out of `make help`.
 check_deps:
 	@$(MAKE) --no-print-directory check_node check_npm check_dprint check_cursor
+
+# Install npm dependencies before compiling.
+install_dependencies:
+	@$(LOGGER) log_target "Installing npm dependencies"
+	@set -o pipefail; $(LOGGER) log_run_dim npm install
+	@$(LOGGER) log_success "Dependencies installed"
 
 # Verify required development tools and print their versions on success.
 check_node:
@@ -74,24 +82,17 @@ help:
 		awk 'BEGIN {FS = ".PHONY: |## "}; {printf " %-22s$(RESET) $(DIM)- %s$(RESET)\n", $$2, $$3}'
 	@echo ""
 
-# Check all command-line dependencies before installing packages.
+# Check all required command-line dependencies.
 .PHONY: check ## Verify all developer dependencies
 check:
 	@$(LOGGER) log_target "Checking developer dependencies"
 	@$(MAKE) --no-print-directory check_deps
 	@$(LOGGER) log_success "All dependencies OK"
 
-# Install JavaScript dependencies from package.json.
-.PHONY: install ## Install npm dependencies
-install: check
-	@$(LOGGER) log_target "Installing npm dependencies"
-	@set -o pipefail; $(LOGGER) log_run_dim npm install
-	@$(LOGGER) log_success "Dependencies installed"
-
-# Compile TypeScript into out/.
+# Install dependencies, then compile TypeScript into out/.
 .PHONY: build ## Compile the TypeScript extension
-build:
-	@$(LOGGER) log_target "Compiling TypeScript"
+build: install_dependencies
+	@$(LOGGER) log_target "Compiling TypeScript extension"
 	@set -o pipefail; $(LOGGER) log_run_dim npm run compile
 	@$(LOGGER) log_success "Build complete"
 
@@ -122,6 +123,13 @@ package: build
 	@$(LOGGER) log_target "Packaging Cursor Approve"
 	@set -o pipefail; $(LOGGER) log_run_dim npm run package
 	@$(LOGGER) log_success "Package complete"
+
+# Package the extension, then install its VSIX through the Cursor CLI.
+.PHONY: install ## Install the packaged extension into Cursor
+install: check_cursor package
+	@$(LOGGER) log_target "Installing Cursor Approve"
+	@set -o pipefail; $(LOGGER) log_run_dim cursor --install-extension "$(VSIX)"
+	@$(LOGGER) log_success "Extension installed"
 
 # Synchronize the VERSION file with files that expose the extension version.
 .PHONY: bump-version ## Sync VERSION into package.json and README
