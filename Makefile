@@ -19,7 +19,8 @@ SHELL := /bin/bash
 # Resolve paths from this Makefile so targets work from any current directory.
 MAKEFILE_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 LOGGER := source "$(MAKEFILE_DIR)scripts/log.bash" &&
-EXTENSION_VERSION := $(shell tr -d ' \n\r' < "$(MAKEFILE_DIR)VERSION")
+# vsce names the VSIX from package.json, so derive the install path from the manifest.
+EXTENSION_VERSION := $(shell cd "$(MAKEFILE_DIR)" && node -p "require('./package.json').version")
 VSIX := $(MAKEFILE_DIR)cursor-approve-$(EXTENSION_VERSION).vsix
 RESET := \033[0m
 DIM := \033[2m

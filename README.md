@@ -42,7 +42,7 @@ A status bar toggle shows whether automatic approval is armed. Click it, use the
 Install the latest `.vsix` from [Releases](https://github.com/drluckyspin/cursor-approve/releases), then:
 
 ```bash
-cursor --install-extension cursor-approve-0.3.1.vsix
+cursor --install-extension cursor-approve-0.3.0.vsix
 ```
 
 Reload the window (`Cmd+Shift+P` → **Developer: Reload Window**), then click **Auto Approve** in the status bar or run
@@ -234,7 +234,7 @@ make check
 make build      # install npm dependencies, then compile
 make lint
 make fmt
-make package    # build cursor-approve-0.3.1.vsix
+make package    # build cursor-approve-0.3.0.vsix
 make install    # package and install the VSIX into Cursor
 ```
 
@@ -251,8 +251,8 @@ Run `make bump-version X.Y.Z` to update `VERSION`, synchronize the extension man
 | 0.2.0     | Theme-accent status bar, `statusBarStyle` setting               |
 | 0.1.0     | Initial release — polling, toggle, diagnostics                  |
 
-See [CHANGELOG.md](CHANGELOG.md) for details. Published releases:
-[v0.1.0](https://github.com/drluckyspin/cursor-approve/releases/tag/v0.1.0) and
+See [CHANGELOG.md](CHANGELOG.md) for the full version history. Published GitHub releases (not every table row has a
+separate release): [v0.1.0](https://github.com/drluckyspin/cursor-approve/releases/tag/v0.1.0) and
 [v0.3.0](https://github.com/drluckyspin/cursor-approve/releases/tag/v0.3.0).
 
 ## License

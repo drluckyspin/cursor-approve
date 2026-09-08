@@ -93,7 +93,7 @@ Useful verification commands in the Extension Development Host:
 | File           | Role                                                                                   |
 | -------------- | -------------------------------------------------------------------------------------- |
 | `VERSION`      | Source of truth for the extension version                                              |
-| `package.json` | Synced by `make bump-version`                                                          |
+| `package.json` | Synced by `make bump-version` (including `package-lock.json`)                          |
 | `README.md`    | VSIX install examples synced by `make bump-version`; release history synced on publish |
 | `CHANGELOG.md` | `[Unreleased]` during development; finalized by the release workflow on publish        |
 

@@ -4,7 +4,7 @@ set -euo pipefail
 # -----------------------------------------------------------------------------------------------------------
 # Script Name: bump-version.sh
 #
-# Description: Synchronize a semantic version into VERSION, package.json, and README VSIX examples.
+# Description: Synchronize a semantic version into VERSION, package.json, package-lock.json, and README VSIX examples.
 #
 # Usage:
 #   make bump-version X.Y.Z
@@ -46,10 +46,9 @@ log_indent log_info_dim "Setting version to $VERSION"
 printf "%s\n" "$VERSION" > "$ROOT/VERSION"
 log_indent log_success "Updated VERSION"
 
-# Keep the extension manifest aligned with the canonical version.
-sed -i.bak -E "s/\"version\": \"[^\"]+\"/\"version\": \"$VERSION\"/" "$ROOT/package.json"
-rm -f "$ROOT/package.json.bak"
-log_indent log_success "Updated package.json"
+# Keep package.json and package-lock.json aligned with the canonical version.
+(cd "$ROOT" && npm version "$VERSION" --no-git-tag-version --allow-same-version >/dev/null)
+log_indent log_success "Updated package.json and package-lock.json"
 
 # Update versioned local-install examples in the README.
 sed -i.bak -E "s/cursor-approve-[0-9]+\\.[0-9]+\\.[0-9]+([-.][0-9A-Za-z.-]+)?\\.vsix/cursor-approve-$VERSION.vsix/g" \
