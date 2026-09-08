@@ -118,7 +118,7 @@ fi
 
 readme_updated=false
 
-if grep -qE "^\\| $VERSION[[:space:]]+\\|" "$README"; then
+if grep -qE "^\\| ${VERSION}[[:space:]]+\\|" "$README"; then
 	log_indent log_info_dim "README release history already lists v$VERSION"
 else
 	log_indent log_info_dim "Adding README release history row for v$VERSION"
