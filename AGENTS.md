@@ -83,8 +83,9 @@ Set `VERBOSE=true` to retain unfiltered output from Makefile commands that use `
 
 Useful verification commands in the Extension Development Host:
 
-- **Cursor Approve: Show Diagnostics** opens the Output panel with the **Cursor Approve** channel selected. Ensure the
-  Output panel log level includes **Info**.
+- **Cursor Approve: Show Diagnostics** opens the Output panel with the **Cursor Approve** channel selected. The
+  status-bar hover tooltip also provides a compact snapshot of its state, including unsuccessful approval attempts.
+  Ensure the Output panel log level includes **Info**.
 - **Cursor Approve: List Cursor Composer Commands** lists all registered `composer.*` commands and confirms the
   extension's approval commands are available.
 

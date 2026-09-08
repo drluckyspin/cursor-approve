@@ -30,8 +30,8 @@ screen, or scrape the pink **Run** button. Instead it calls Cursor's own workben
 That makes it independent of your theme, window position, display scaling, and multi-monitor layout. It also cannot leak
 a stray `Enter` into your editor or terminal when nothing is waiting for approval.
 
-A status bar toggle shows whether automatic approval is armed. Click it, use the Command Palette, or flip
-`cursorApprove.enabled` in settings.
+A status bar toggle shows whether automatic approval is armed. Hover it for a compact diagnostic snapshot, click it, use
+the Command Palette, or flip `cursorApprove.enabled` in settings.
 
 ![alt text](docs/auto-approve-off.png)
 
@@ -42,7 +42,7 @@ A status bar toggle shows whether automatic approval is armed. Click it, use the
 Install the latest `.vsix` from [Releases](https://github.com/drluckyspin/cursor-approve/releases), then:
 
 ```bash
-cursor --install-extension cursor-approve-0.3.1.vsix
+cursor --install-extension cursor-approve-0.3.2.vsix
 ```
 
 Reload the window (`Cmd+Shift+P` → **Developer: Reload Window**), then click **Auto Approve** in the status bar or run
@@ -194,9 +194,10 @@ This bypasses a deliberate confirmation step. An agent that has been prompt-inje
 task, can run shell commands without asking while automatic approval is enabled.
 
 - Keep the status bar toggle visible so you always know when it is armed.
+- Hover the status bar toggle for its current mode, polling state, command availability, and unsuccessful-attempt count.
 - Use `onlyWhenFocused` if you only want unattended approval in the active window.
 - Prefer `run` over `allowlist` — see [Approval modes](#approval-modes) for how **Always Run** persistence works.
-- The extension disables itself after three consecutive command failures rather than looping silently.
+- The extension disables itself after three consecutive unsuccessful approval attempts rather than looping silently.
 
 Cursor's internal commands are undocumented and may be renamed between releases. Run **List Cursor Composer Commands**
 after upgrading Cursor to confirm the approval commands still exist.
@@ -234,7 +235,7 @@ make check
 make build      # install npm dependencies, then compile
 make lint
 make fmt
-make package    # build cursor-approve-0.3.1.vsix
+make package    # build cursor-approve-0.3.2.vsix
 make install    # package and install the VSIX into Cursor
 ```
 
