@@ -241,14 +241,15 @@ Run `make bump-version X.Y.Z` to update `VERSION`, synchronize the extension man
 
 ## Release history
 
-| Extension | Notes                                             |
-| --------- | ------------------------------------------------- |
-| 0.2.0     | Theme-accent status bar, `statusBarStyle` setting |
-| 0.1.0     | Initial release — polling, toggle, diagnostics    |
+| Extension | Notes                                                           |
+| --------- | --------------------------------------------------------------- |
+| 0.3.0     | Hardening, development tooling, diagnostics, and refreshed docs |
+| 0.2.0     | Theme-accent status bar, `statusBarStyle` setting               |
+| 0.1.0     | Initial release — polling, toggle, diagnostics                  |
 
-See [CHANGELOG.md](CHANGELOG.md) for details. Tagged releases:
-[v0.1.0](https://github.com/drluckyspin/cursor-approve/releases/tag/v0.1.0),
-[v0.2.0](https://github.com/drluckyspin/cursor-approve/releases/tag/v0.2.0).
+See [CHANGELOG.md](CHANGELOG.md) for details. Published releases:
+[v0.1.0](https://github.com/drluckyspin/cursor-approve/releases/tag/v0.1.0) and
+[v0.3.0](https://github.com/drluckyspin/cursor-approve/releases/tag/v0.3.0).
 
 ## License
 

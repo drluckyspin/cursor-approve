@@ -106,7 +106,8 @@ make fmt-check
 make package
 ```
 
-Update `CHANGELOG.md`, tag the release, and push only when explicitly requested.
+Before finishing a release, verify published versions on GitHub and update both `CHANGELOG.md` and README's release
+history. Do not list a release until its GitHub release exists. Tag and push only when explicitly requested.
 
 ## Agent Guidelines
 
@@ -116,6 +117,8 @@ Update `CHANGELOG.md`, tag the release, and push only when explicitly requested.
 - Run `make lint` and `make fmt-check` before finishing substantive changes.
 - For Markdown, run dprint with `~/.config/dprint/dprint.json`; use aligned GFM tables and language-tagged code fences.
 - Source `scripts/log.bash` in new Bash scripts instead of recreating logging helpers.
+- Comment all code clearly enough to explain its purpose, non-obvious decisions, and safety-relevant behavior. Include a
+  comment header in all files.
 - Keep changes minimal, focused, and consistent with existing TypeScript style: tabs and double quotes.
 - Test extension behavior in the Extension Development Host.
 

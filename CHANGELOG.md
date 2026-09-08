@@ -5,6 +5,20 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-09-07
+
+### Added
+
+- A Makefile workflow for building, linting, formatting, packaging, installing, and synchronizing release versions.
+- `AGENTS.md` instructions for development, release maintenance, and safety constraints.
+
+### Changed
+
+- `Show Diagnostics` and `List Cursor Composer Commands` now focus the **Cursor Approve** Output channel when run from
+  the Command Palette.
+- Documentation and screenshots now clarify approval modes, safety trade-offs, and the extension development workflow.
+- Packaged VSIX files now exclude development-only tooling and agent instructions.
+
 ## [0.2.0] - 2026-09-04
 
 ### Changed
