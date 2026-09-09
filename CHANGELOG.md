@@ -7,6 +7,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-09-09
+
 ### Changed
 
 - Diagnostics now reliably select the **Cursor Approve** Output channel, and the status-bar hover tooltip exposes a
