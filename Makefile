@@ -19,9 +19,10 @@ SHELL := /bin/bash
 # Resolve paths from this Makefile so targets work from any current directory.
 MAKEFILE_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 LOGGER := source "$(MAKEFILE_DIR)scripts/log.bash" &&
-# vsce names the VSIX from package.json, so derive the install path from the manifest.
+# vsce names the VSIX from package.json, so derive its path and success message from the manifest.
+EXTENSION_NAME := $(shell cd "$(MAKEFILE_DIR)" && node -p "require('./package.json').name")
 EXTENSION_VERSION := $(shell cd "$(MAKEFILE_DIR)" && node -p "require('./package.json').version")
-VSIX := $(MAKEFILE_DIR)cursor-approve-$(EXTENSION_VERSION).vsix
+VSIX := $(MAKEFILE_DIR)$(EXTENSION_NAME)-$(EXTENSION_VERSION).vsix
 RESET := \033[0m
 DIM := \033[2m
 
@@ -146,7 +147,8 @@ package: build
 install: check_cursor package
 	@$(LOGGER) log_target "Installing Cursor Approve"
 	@set -o pipefail; $(LOGGER) log_run_dim cursor --install-extension "$(VSIX)"
-	@$(LOGGER) log_success "Extension installed"
+	@echo ""
+	@$(LOGGER) log_success "Successfully installed $(EXTENSION_NAME)-$(EXTENSION_VERSION)"
 
 # Synchronize the VERSION file with files that expose the extension version.
 .PHONY: bump-version ## Sync VERSION into package.json and README

@@ -45,6 +45,7 @@ const SECTION = "cursorApprove";
 
 let output: vscode.LogOutputChannel;
 let statusBar: vscode.StatusBarItem;
+let extensionVersion = "unknown";
 
 /** `setInterval` handle for the approval poll loop; undefined when disarmed. */
 let timer: ReturnType<typeof setInterval> | undefined;
@@ -140,7 +141,15 @@ async function tick(): Promise<void> {
 	}
 
 	pollCount++;
+	const errorsBeforePoll = errorCount;
 	await approveOnce("poll");
+
+	// Reassigning a visible status-bar tooltip makes Cursor redraw it, which
+	// causes flicker while it is hovered. Successful polls only change the
+	// counter, so refresh the snapshot only when an error changes.
+	if (errorCount !== errorsBeforePoll) {
+		updateStatusBar();
+	}
 }
 
 function stopPolling(): void {
@@ -217,6 +226,24 @@ function applyStatusBarStyle(enabled: boolean): void {
 	}
 }
 
+/** Build a current, compact diagnostic view for the status bar hover tooltip. */
+function statusBarTooltip(enabled: boolean): string {
+	return [
+		`Automatic approval is ${enabled ? "on" : "off"}. Click to ${enabled ? "disable" : "enable"}.`,
+		"",
+		`Version: ${extensionVersion}`,
+		`Mode: ${currentMode()}`,
+		`Command available: ${commandAvailable ?? "checking"}`,
+		`Polling: ${timer !== undefined}`,
+		`Interval: ${config().get<number>("intervalMs", 1000)} ms`,
+		`Only when focused: ${config().get<boolean>("onlyWhenFocused", false)}`,
+		`Window focused: ${vscode.window.state.focused}`,
+		`Polls: ${pollCount}`,
+		`Unsuccessful attempts: ${errorCount}`,
+		`Last unsuccessful result: ${lastError ?? "none"}`,
+	].join("\n");
+}
+
 /** Sync status bar text, tooltip, and highlight with the current enabled state. */
 function updateStatusBar(): void {
 	if (!config().get<boolean>("showStatusBarItem", true)) {
@@ -226,9 +253,7 @@ function updateStatusBar(): void {
 
 	const enabled = isEnabled();
 	statusBar.text = enabled ? "$(check-all) Auto Approve" : "$(circle-slash) Auto Approve";
-	statusBar.tooltip = enabled
-		? `Automatically approving pending tool calls in '${currentMode()}' mode. Click to disable.`
-		: "Automatic approval is off. Click to enable.";
+	statusBar.tooltip = statusBarTooltip(enabled);
 	applyStatusBarStyle(enabled);
 	statusBar.show();
 }
@@ -254,11 +279,14 @@ function applyConfiguration(): void {
  * `output.show()` alone is unreliable when invoked from the command palette
  * because focus returns to the editor as the palette closes.
  */
-function revealOutput(): void {
-	setTimeout(() => {
-		void vscode.commands.executeCommand("workbench.panel.output.focus");
-		output.show(false);
-	}, 0);
+async function revealOutput(): Promise<void> {
+	// Let the Command Palette finish closing before changing the active panel.
+	await new Promise<void>((resolve) => setTimeout(resolve, 0));
+	await vscode.commands.executeCommand("workbench.panel.output.focus");
+
+	// Select this channel last: focusing the panel can otherwise restore the
+	// previously selected Output channel after `output.show()` runs.
+	output.show(false);
 }
 
 // ---------------------------------------------------------------------------
@@ -276,6 +304,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	output = vscode.window.createOutputChannel("Cursor Approve", { log: true });
 	statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
 	statusBar.command = "cursorApprove.toggle";
+	extensionVersion = String(context.extension.packageJSON.version);
 
 	context.subscriptions.push(output, statusBar);
 
@@ -302,7 +331,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		vscode.commands.registerCommand("cursorApprove.diagnose", async () => {
 			const available = await checkCommandAvailability();
 
-			output.info("--- diagnostics ---");
+			output.info("--- Diagnostics ---");
+			output.info(`version            ${extensionVersion}`);
 			output.info(`enabled            ${isEnabled()}`);
 			output.info(`polling            ${timer !== undefined}`);
 			output.info(`mode               ${currentMode()}`);
@@ -312,12 +342,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			output.info(`onlyWhenFocused    ${config().get<boolean>("onlyWhenFocused", false)}`);
 			output.info(`windowFocused      ${vscode.window.state.focused}`);
 			output.info(`polls              ${pollCount}`);
-			output.info(`errors             ${errorCount}`);
-			output.info(`lastError          ${lastError ?? "none"}`);
+			output.info(`unsuccessful       ${errorCount}`);
+			output.info(`lastUnsuccessful   ${lastError ?? "none"}`);
 			output.info("Cursor's command is silent when nothing is pending, so poll");
 			output.info("count is not a count of actual approvals.");
-			output.info("--- end diagnostics ---");
-			revealOutput();
+			output.info("--- End Diagnostics ---");
+			await revealOutput();
 		}),
 		// Discovery helper: Cursor's composer commands are undocumented, and
 		// this is how the approval command IDs above were found in the first place.
@@ -330,7 +360,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 				output.info(command);
 			}
 			output.info("--- end ---");
-			revealOutput();
+			await revealOutput();
 		}),
 		vscode.workspace.onDidChangeConfiguration((event) => {
 			if (event.affectsConfiguration(SECTION)) {

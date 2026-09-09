@@ -7,6 +7,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- Diagnostics now reliably select the **Cursor Approve** Output channel, and the status-bar hover tooltip exposes a
+  compact state snapshot without flickering during successful polling.
+- User-facing diagnostics call failed approval-command invocations "unsuccessful attempts" rather than errors.
+
 ## [0.3.1] - 2026-09-08
 
 ### Added
