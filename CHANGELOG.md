@@ -38,6 +38,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - The approval probe no longer reads terminal command lines. The event covers every execution the host exposes,
   including commands the user typed, whose arguments routinely carry secrets.
 - Deactivation no longer rejects when the final metrics write fails; the failure is logged instead.
+- Command availability now checks the command for the configured mode and is rechecked when the mode changes, so a
+  missing `allowlist` command is reported instead of being masked by the `run` command's presence.
+- **Active since** reports the current stretch after a suspend gap is discarded, and includes the date when the stretch
+  began on an earlier day.
+- Repeated approval failures no longer force an extension-storage write on every poll.
 
 ## [0.3.2] - 2026-09-09
 

@@ -208,7 +208,7 @@ Anything that is only interesting when it is true gets a line only while it appl
 command, unsuccessful attempts today, approval restricted to the focused window, or `allowlist` mode adding approved
 commands to the allowlist. **Show Diagnostics** remains the full, copyable breakdown.
 
-Durations are shown to the nearest minute, and the dashboard is replaced only when its rendered text changes. It is
+Durations are shown in whole elapsed minutes, and the dashboard is replaced only when its rendered text changes. It is
 therefore current whenever you hover it without redrawing an open hover every second. It uses the active theme's tooltip
 colors, because VS Code does not give extensions an API for a custom tooltip background. Its links are restricted to
 this extension's toggle and diagnostics commands plus the built-in Settings command.

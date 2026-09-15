@@ -117,6 +117,9 @@ let lastError: string | undefined;
 /** Cached result of the last `checkCommandAvailability` call. */
 let commandAvailable: boolean | undefined;
 
+/** Mode that cached result belongs to, since each mode uses its own command. */
+let commandAvailableForMode: ApproveMode | undefined;
+
 /** Priority the current status bar item was created with. */
 let statusBarPriority: number | undefined;
 
@@ -205,6 +208,11 @@ function activeGapToleranceMs(): number {
 	return Math.max(pollIntervalMs * 3, MIN_ACTIVE_GAP_TOLERANCE_MS);
 }
 
+/** True when a gap is too long to be anything but the host having stopped. */
+function isSuspendGap(elapsed: number): boolean {
+	return elapsed > activeGapToleranceMs();
+}
+
 /** Elapsed time since the last checkpoint, discarding suspended time. */
 function elapsedSinceCheckpoint(metrics: ExposureMetrics, now: number): number {
 	if (metrics.enabledSince === undefined) {
@@ -212,7 +220,7 @@ function elapsedSinceCheckpoint(metrics: ExposureMetrics, now: number): number {
 	}
 
 	const elapsed = now - metrics.enabledSince;
-	return elapsed > 0 && elapsed <= activeGapToleranceMs() ? elapsed : 0;
+	return elapsed > 0 && !isSuspendGap(elapsed) ? elapsed : 0;
 }
 
 /** Return accumulated enabled time, including the currently active interval. */
@@ -224,6 +232,12 @@ function enabledDuration(metrics: ExposureMetrics, now = Date.now()): number {
 function checkpointEnabledDuration(metrics: ExposureMetrics, now = Date.now()): void {
 	if (metrics.enabledSince === undefined) {
 		return;
+	}
+
+	// Discarding a gap means the extension was not running across it, so the
+	// stretch the dashboard reports starts here rather than spanning it.
+	if (isSuspendGap(now - metrics.enabledSince)) {
+		activeSince = now;
 	}
 
 	metrics.enabledDurationMs += elapsedSinceCheckpoint(metrics, now);
@@ -367,7 +381,11 @@ function recordPoll(): boolean {
 function recordUnsuccessfulAttempt(): void {
 	sessionMetrics.unsuccessfulAttempts++;
 	dailyMetrics.unsuccessfulAttempts++;
-	persistDailyMetrics(true);
+
+	// Throttled rather than forced: a failure that recurs every poll would
+	// otherwise write to extension storage continuously. State transitions and
+	// shutdown still force a write, so at most one interval of counts is lost.
+	persistDailyMetrics();
 }
 
 // ---------------------------------------------------------------------------
@@ -382,12 +400,17 @@ function recordUnsuccessfulAttempt(): void {
  * than silently polling a command that will never exist.
  */
 async function checkCommandAvailability(): Promise<boolean> {
+	// The configured mode decides which command is invoked, so checking any
+	// other one would report a missing allowlist command as available.
+	const mode = currentMode();
+	const command = APPROVE_COMMANDS[mode];
 	const all = await vscode.commands.getCommands(true);
-	commandAvailable = all.includes(APPROVE_COMMANDS.run);
+	commandAvailable = all.includes(command);
+	commandAvailableForMode = mode;
 
 	if (!commandAvailable) {
 		output.warn(
-			`Command '${APPROVE_COMMANDS.run}' is not registered. This extension requires Cursor, not stock VS Code.`,
+			`Command '${command}' is not registered. This extension requires Cursor, not stock VS Code.`,
 		);
 	}
 
@@ -587,7 +610,16 @@ function formatDuration(durationMs: number): string {
 }
 
 function formatClockTime(timestamp: number): string {
-	return new Date(timestamp).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+	const when = new Date(timestamp);
+	const time = when.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+
+	// A stretch running past local midnight would otherwise read as a start
+	// time later than the current time.
+	if (localDateKey(when) === localDateKey()) {
+		return time;
+	}
+
+	return `${when.toLocaleDateString(undefined, { month: "short", day: "numeric" })}, ${time}`;
 }
 
 function formatInterval(intervalMs: number): string {
@@ -739,6 +771,12 @@ function applyConfiguration(): void {
 	}
 
 	updateStatusBar();
+
+	// Each mode invokes a different command, so a mode change invalidates the
+	// cached availability that the dashboard and diagnostics report.
+	if (commandAvailableForMode !== currentMode()) {
+		void checkCommandAvailability().then(() => updateStatusBar());
+	}
 }
 
 /**
