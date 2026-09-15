@@ -42,7 +42,7 @@ Command Palette, or flip `cursorApprove.enabled` in settings.
 Install the latest `.vsix` from [Releases](https://github.com/drluckyspin/cursor-approve/releases), then:
 
 ```bash
-cursor --install-extension cursor-approve-0.3.2.vsix
+cursor --install-extension cursor-approve-0.4.0.vsix
 ```
 
 Reload the window (`Cmd+Shift+P` → **Developer: Reload Window**), then click **Auto Approve** in the status bar or run
@@ -183,7 +183,7 @@ If you prefer a filled item, set `statusBarStyle` to `background` and override t
 Hover **Auto Approve** for a compact, theme-native dashboard:
 
 ```text
-Cursor Approve  v0.3.2
+Cursor Approve  v0.4.0
 Active · run · every 1s
 
 Active since 9:12 AM
@@ -275,7 +275,7 @@ make check
 make build      # install npm dependencies, then compile
 make lint
 make fmt
-make package    # build cursor-approve-0.3.2.vsix
+make package    # build cursor-approve-0.4.0.vsix
 make install    # package and install the VSIX into Cursor
 ```
 
