@@ -107,7 +107,8 @@ When changing dashboard metrics, preserve these safeguards:
 - Never read `TerminalShellExecution.commandLine` in the probe. It fires for every execution the host exposes, including
   commands the user typed, and their arguments routinely carry tokens and other secrets.
 - Active time must accrue as it passes, not from a single start timestamp, so that time the machine spent suspended is
-  discarded rather than reported as active.
+  discarded rather than reported as active. The gap tolerance follows the interval that opened the current checkpoint
+  window, so that changing `intervalMs` cannot retroactively reclassify that window as suspended time.
 
 ## Version and Release
 

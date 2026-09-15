@@ -105,6 +105,9 @@ let extensionUri: vscode.Uri | undefined;
 /** `setInterval` handle for the approval poll loop; undefined when stopped. */
 let timer: ReturnType<typeof setInterval> | undefined;
 
+/** Poll interval the currently open checkpoint window was started under. */
+let pollIntervalMs = 1000;
+
 /** Consecutive `executeCommand` failures used to decide when to stop polling. */
 let consecutiveErrorCount = 0;
 
@@ -193,9 +196,13 @@ function createDailyMetrics(now = new Date()): DailyMetrics {
  * poll interval means the extension was not approving anything during it.
  * Counting it would report a closed laptop as active, which is how a day of
  * intermittent use turns into an implausible number of hours.
+ *
+ * Derived from the interval the open checkpoint window was started under rather
+ * than from the current setting, because lowering the interval would otherwise
+ * shrink the tolerance beneath a window that was legitimately wider.
  */
 function activeGapToleranceMs(): number {
-	return Math.max(config().get<number>("intervalMs", 1000) * 3, MIN_ACTIVE_GAP_TOLERANCE_MS);
+	return Math.max(pollIntervalMs * 3, MIN_ACTIVE_GAP_TOLERANCE_MS);
 }
 
 /** Elapsed time since the last checkpoint, discarding suspended time. */
@@ -459,6 +466,14 @@ function startPolling(): void {
 	stopPolling();
 
 	const interval = config().get<number>("intervalMs", 1000);
+
+	// Close the open checkpoint window under the interval that opened it, so a
+	// lowered interval cannot retroactively judge that window as a suspend gap.
+	const now = Date.now();
+	checkpointEnabledDuration(sessionMetrics, now);
+	checkpointEnabledDuration(dailyMetrics, now);
+	pollIntervalMs = interval;
+
 	timer = setInterval(() => void tick(), interval);
 	output.info(`Polling every ${interval}ms in '${currentMode()}' mode.`);
 }
