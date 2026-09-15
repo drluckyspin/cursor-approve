@@ -48,6 +48,9 @@ const DAILY_METRICS_PERSIST_INTERVAL_MS = 60_000;
 /** How long after an invocation a terminal execution may still be related to it. */
 const PROBE_CORRELATION_MS = 2_000;
 
+/** Grace period for the Output view to finish restoring its previous channel. */
+const OUTPUT_SETTLE_MS = 250;
+
 /**
  * How long automatic approval has been active, shared by the in-memory session
  * and persisted daily buckets.
@@ -705,20 +708,31 @@ function registerApprovalProbe(context: vscode.ExtensionContext): void {
 	}
 }
 
+/** Resolve on a later turn of the event loop, so the workbench can settle. */
+function delay(ms = 0): Promise<void> {
+	return new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
 /**
  * Open the Output panel with this extension's channel selected.
  *
  * `output.show()` alone is unreliable when invoked from the command palette
- * because focus returns to the editor as the palette closes.
+ * because focus returns to the editor as the palette closes. Revealing the
+ * panel first fixes that, but the panel restores whichever channel was last
+ * selected, and that restoration can land after the focus command resolves and
+ * quietly undo the selection. Selecting the channel on a later turn and once
+ * more after the view settles is what makes the result stick.
  */
 async function revealOutput(): Promise<void> {
 	// Let the Command Palette finish closing before changing the active panel.
-	await new Promise<void>((resolve) => setTimeout(resolve, 0));
+	await delay();
 	await vscode.commands.executeCommand("workbench.panel.output.focus");
 
-	// Select this channel last: focusing the panel can otherwise restore the
-	// previously selected Output channel after `output.show()` runs.
-	output.show(false);
+	await delay();
+	output.show(true);
+
+	await delay(OUTPUT_SETTLE_MS);
+	output.show(true);
 }
 
 // ---------------------------------------------------------------------------
