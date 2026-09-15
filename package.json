@@ -19,7 +19,7 @@
 		"url": "https://github.com/drluckyspin/cursor-approve/issues"
 	},
 	"engines": {
-		"vscode": "^1.90.0"
+		"vscode": "^1.93.0"
 	},
 	"categories": [
 		"Other"
@@ -94,6 +94,11 @@
 					"type": "boolean",
 					"default": true,
 					"description": "Show a status bar item indicating whether automatic approval is active."
+				},
+				"cursorApprove.statusBarPriority": {
+					"type": "number",
+					"default": -100,
+					"markdownDescription": "Where the item sits in the right-hand status bar group. Higher values move it further **left**; lower or negative values move it further **right**. Changing this recreates the item."
 				},
 				"cursorApprove.statusBarStyle": {
 					"type": "string",
