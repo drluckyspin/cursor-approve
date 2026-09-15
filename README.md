@@ -30,8 +30,8 @@ screen, or scrape the pink **Run** button. Instead it calls Cursor's own workben
 That makes it independent of your theme, window position, display scaling, and multi-monitor layout. It also cannot leak
 a stray `Enter` into your editor or terminal when nothing is waiting for approval.
 
-A status bar toggle shows whether automatic approval is armed. Hover it for a compact diagnostic snapshot, click it, use
-the Command Palette, or flip `cursorApprove.enabled` in settings.
+A status bar toggle shows whether automatic approval is active. Hover it for a compact dashboard, click it, use the
+Command Palette, or flip `cursorApprove.enabled` in settings.
 
 ![alt text](docs/auto-approve-off.png)
 
@@ -85,7 +85,7 @@ card; neither affects other tool types (MCP, browser, etc.).
 **Default is `run`.** That approves the current shell command and nothing more.
 
 `allowlist` is opt-in and behaves like clicking **Always Run** on every pending shell approval while the extension is
-armed. Cursor may remember those commands and stop prompting for them later — even after you turn the extension off.
+active. Cursor may remember those commands and stop prompting for them later — even after you turn the extension off.
 That persistence is Cursor's own allowlist, not something this extension can undo. Only use it when you are comfortable
 with commands being remembered project-wide.
 
@@ -102,6 +102,7 @@ with commands being remembered project-wide.
 | `cursorApprove.mode`              | `string`  | `run`                 | `run` or `allowlist`                               |
 | `cursorApprove.onlyWhenFocused`   | `boolean` | `false`               | Only approve while this window has focus           |
 | `cursorApprove.showStatusBarItem` | `boolean` | `true`                | Show the status bar toggle                         |
+| `cursorApprove.statusBarPriority` | `number`  | `-100`                | Position; lower values sit further right           |
 | `cursorApprove.statusBarStyle`    | `string`  | `foreground`          | `foreground`, `background`, or `none`              |
 | `cursorApprove.activeColor`       | `string`  | `textLink.foreground` | Accent color when `statusBarStyle` is `foreground` |
 
@@ -144,9 +145,16 @@ const f = jAh(g);
 if (!f) return; // nothing pending, no-op
 ```
 
+### Status bar position
+
+The item sits in the right-hand status bar group, ordered by `cursorApprove.statusBarPriority`. VS Code draws higher
+priorities further **left**, so the default of `-100` keeps it to the right of most extensions; lower it further to push
+it toward the edge. VS Code fixes an item's priority when it is created, so the extension recreates the item whenever
+you change this setting.
+
 ### Status bar highlight
 
-The status bar item is highlighted while automatic approval is active so an unattended session is never silently armed.
+The status bar item is highlighted while automatic approval is active so an unattended session never approves silently.
 
 | Style        | Appearance                                                        |
 | ------------ | ----------------------------------------------------------------- |
@@ -169,6 +177,38 @@ If you prefer a filled item, set `statusBarStyle` to `background` and override t
   }
 }
 ```
+
+### Status dashboard
+
+Hover **Auto Approve** for a compact, theme-native dashboard:
+
+```text
+Cursor Approve  v0.3.2
+Active · run · every 1s
+
+Active since 9:12 AM
+Session 47m · Today 5h 5m
+─────────────────────────────────
+Turn Off · Diagnostics · Settings
+```
+
+The dashboard reports how long automatic approval has been active, because that is how long Cursor's confirmation step
+has been bypassed. **Today** covers the current local calendar day and survives an extension-host reload; **Session**
+resets when the extension host activates; **Active since** is the start of the current uninterrupted stretch.
+
+It deliberately does not report how many approvals were granted. That number is not observable: Cursor's approval
+command resolves identically whether it approved a request or found nothing pending, and the pending state lives in
+renderer-side composer services that extensions cannot read. A count of command invocations would only restate the poll
+interval, so the dashboard omits it rather than implying activity it cannot measure.
+
+Anything that is only interesting when it is true gets a line only while it applies: an unavailable Cursor approval
+command, unsuccessful attempts today, approval restricted to the focused window, or `allowlist` mode adding approved
+commands to the allowlist. **Show Diagnostics** remains the full, copyable breakdown.
+
+Durations are shown to the nearest minute, and the dashboard is replaced only when its rendered text changes. It is
+therefore current whenever you hover it without redrawing an open hover every second. It uses the active theme's tooltip
+colors, because VS Code does not give extensions an API for a custom tooltip background. Its links are restricted to
+this extension's toggle and diagnostics commands plus the built-in Settings command.
 
 ## Built-in alternative
 
@@ -193,8 +233,8 @@ behavior (approve once) rather than **Always Run**.
 This bypasses a deliberate confirmation step. An agent that has been prompt-injected, or that simply misunderstands a
 task, can run shell commands without asking while automatic approval is enabled.
 
-- Keep the status bar toggle visible so you always know when it is armed.
-- Hover the status bar toggle for its current mode, polling state, command availability, and unsuccessful-attempt count.
+- Keep the status bar toggle visible so you always know when it is active.
+- Hover the status bar toggle for its configuration plus how long approval has been active this session and today.
 - Use `onlyWhenFocused` if you only want unattended approval in the active window.
 - Prefer `run` over `allowlist` — see [Approval modes](#approval-modes) for how **Always Run** persistence works.
 - The extension disables itself after three consecutive unsuccessful approval attempts rather than looping silently.

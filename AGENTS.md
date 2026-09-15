@@ -84,10 +84,26 @@ Set `VERBOSE=true` to retain unfiltered output from Makefile commands that use `
 Useful verification commands in the Extension Development Host:
 
 - **Cursor Approve: Show Diagnostics** opens the Output panel with the **Cursor Approve** channel selected. The
-  status-bar hover tooltip also provides a compact snapshot of its state, including unsuccessful approval attempts.
-  Ensure the Output panel log level includes **Info**.
+  status-bar hover shows a theme-native Markdown dashboard with the time automatic approval has been active this session
+  and today. Daily metrics persist through extension-host reloads; session metrics reset on activation. Ensure the
+  Output panel log level includes **Info**.
 - **Cursor Approve: List Cursor Composer Commands** lists all registered `composer.*` commands and confirms the
   extension's approval commands are available.
+
+When changing dashboard metrics, preserve these safeguards:
+
+- Never report approvals granted. Cursor's `run(e){ await zLo(e,"run") }` handler returns nothing whether it approved a
+  request or found nothing pending, no command exposes the pending-decision state, and extensions cannot read the
+  `composerShellToolPendingKeybindingsActive` context key. Report active time, which is measurable.
+- Only the current local-date bucket is persisted in `ExtensionContext.globalState`; on a date rollover, enabled time
+  after local midnight belongs to the new bucket.
+- Keep every dashboard value at minute granularity or coarser. The tooltip is rebuilt each tick and reassigned only when
+  its rendered text changes, so a per-second value would redraw a hovered tooltip every second.
+- Restrict trusted Markdown command links to the explicit dashboard command allowlist. Keep the tooltip background
+  theme-controlled; extensions cannot customize it through VS Code's API.
+- The approval probe in `registerApprovalProbe` is diagnostic only. Do not promote its terminal counts to the dashboard
+  or treat them as approvals; Cursor appears to run agent commands through its own pseudoterminal service, and the
+  one-second poll makes timing correlation meaningless.
 
 ## Version and Release
 

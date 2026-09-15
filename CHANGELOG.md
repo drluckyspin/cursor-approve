@@ -7,6 +7,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- A theme-native status-bar dashboard with the extension logo, configuration state, how long automatic approval has been
+  active this session and today, and safe links to toggle approval, open diagnostics, and open settings.
+- The dashboard reports an unavailable approval command, unsuccessful attempts, focused-window-only approval, and
+  `allowlist` mode as dedicated lines only while those conditions apply, keeping the hover readable.
+- `cursorApprove.statusBarPriority` positions the status bar item within the right-hand group.
+- Active-time metrics persist across extension-host reloads and reset on the user's local calendar day.
+- An experimental approval probe records terminal activity an approved shell tool call would produce, reported only
+  through debug logs and **Show Diagnostics**, to establish whether real approvals are observable at all.
+
+### Changed
+
+- The dashboard no longer reports approval-command invocations. Cursor's command resolves the same way whether it
+  approved a request or found nothing pending, so the count only restated the poll interval and implied activity the
+  extension cannot measure.
+- The dashboard stays current instead of holding a snapshot: it is rebuilt each poll and reassigned only when its
+  rendered text changes, which at minute granularity avoids redrawing a hovered tooltip.
+- The extension now requires VS Code 1.93 or later for the terminal shell integration API used by the approval probe.
+
+### Fixed
+
+- **Show Diagnostics** could leave the previously selected Output channel in place. Revealing the panel restores that
+  channel asynchronously, so the extension now selects its own channel after the view settles.
+
 ## [0.3.2] - 2026-09-09
 
 ### Changed
