@@ -51,6 +51,9 @@ const PROBE_CORRELATION_MS = 2_000;
 /** Grace period for the Output view to finish restoring its previous channel. */
 const OUTPUT_SETTLE_MS = 250;
 
+/** Floor for the active-time gap tolerance, so a fast poll rate stays forgiving. */
+const MIN_ACTIVE_GAP_TOLERANCE_MS = 5_000;
+
 /**
  * How long automatic approval has been active, shared by the in-memory session
  * and persisted daily buckets.
@@ -87,7 +90,6 @@ interface ProbeMetrics {
 	shellIntegrationsActivated: number;
 	executionsStarted: number;
 	executionsNearInvocation: number;
-	lastExecution: string | undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -127,6 +129,9 @@ let lastDailyMetricsPersistedAt = 0;
 /** Start of the current uninterrupted active stretch, for "Active since". */
 let activeSince: number | undefined;
 
+/** `setTimeout` handle for the next local-midnight dashboard refresh. */
+let rolloverTimer: ReturnType<typeof setTimeout> | undefined;
+
 /** Rendered tooltip currently assigned, so it is only reassigned when it changes. */
 let lastTooltipValue: string | undefined;
 
@@ -138,7 +143,6 @@ const probeMetrics: ProbeMetrics = {
 	shellIntegrationsActivated: 0,
 	executionsStarted: 0,
 	executionsNearInvocation: 0,
-	lastExecution: undefined,
 };
 
 // ---------------------------------------------------------------------------
@@ -182,9 +186,31 @@ function createDailyMetrics(now = new Date()): DailyMetrics {
 	return { date: localDateKey(now), ...createExposureMetrics() };
 }
 
+/**
+ * Longest gap since the last checkpoint that can still count as active time.
+ *
+ * Timers do not run while the machine is suspended, so a gap well beyond the
+ * poll interval means the extension was not approving anything during it.
+ * Counting it would report a closed laptop as active, which is how a day of
+ * intermittent use turns into an implausible number of hours.
+ */
+function activeGapToleranceMs(): number {
+	return Math.max(config().get<number>("intervalMs", 1000) * 3, MIN_ACTIVE_GAP_TOLERANCE_MS);
+}
+
+/** Elapsed time since the last checkpoint, discarding suspended time. */
+function elapsedSinceCheckpoint(metrics: ExposureMetrics, now: number): number {
+	if (metrics.enabledSince === undefined) {
+		return 0;
+	}
+
+	const elapsed = now - metrics.enabledSince;
+	return elapsed > 0 && elapsed <= activeGapToleranceMs() ? elapsed : 0;
+}
+
 /** Return accumulated enabled time, including the currently active interval. */
 function enabledDuration(metrics: ExposureMetrics, now = Date.now()): number {
-	return metrics.enabledDurationMs + (metrics.enabledSince === undefined ? 0 : now - metrics.enabledSince);
+	return metrics.enabledDurationMs + elapsedSinceCheckpoint(metrics, now);
 }
 
 /** Persist elapsed enabled time into a bucket without changing whether it is active. */
@@ -193,7 +219,7 @@ function checkpointEnabledDuration(metrics: ExposureMetrics, now = Date.now()): 
 		return;
 	}
 
-	metrics.enabledDurationMs += now - metrics.enabledSince;
+	metrics.enabledDurationMs += elapsedSinceCheckpoint(metrics, now);
 	metrics.enabledSince = now;
 }
 
@@ -224,6 +250,33 @@ function loadDailyMetrics(context: vscode.ExtensionContext): void {
 	}
 
 	dailyMetrics = createDailyMetrics();
+}
+
+/**
+ * Refresh the dashboard when the local date changes.
+ *
+ * The poll loop rolls the daily bucket while approval is active, but nothing
+ * runs while it is off, so a hover after midnight would keep reporting
+ * yesterday's total until some other event rebuilt the dashboard.
+ */
+function scheduleDailyRollover(): void {
+	if (rolloverTimer !== undefined) {
+		clearTimeout(rolloverTimer);
+	}
+
+	const now = new Date();
+	const midnight = new Date(now);
+	midnight.setHours(24, 0, 0, 0);
+
+	// A second past midnight, so the new local date is unambiguous.
+	rolloverTimer = setTimeout(() => {
+		if (rollDailyMetricsIfNeeded()) {
+			persistDailyMetrics(true);
+		}
+
+		updateStatusBar();
+		scheduleDailyRollover();
+	}, midnight.getTime() - now.getTime() + 1_000);
 }
 
 /** Start a new current-day bucket whenever the local date changes. */
@@ -290,6 +343,13 @@ function updateEnabledDurationTracking(enabled: boolean): void {
 function recordPoll(): boolean {
 	const now = Date.now();
 	const rolledDay = rollDailyMetricsIfNeeded(new Date(now));
+
+	// Fold each interval in as it passes rather than deriving totals from one
+	// start timestamp. Checkpointing this often is what lets a suspend gap be
+	// recognized and dropped instead of being counted as active time.
+	checkpointEnabledDuration(sessionMetrics, now);
+	checkpointEnabledDuration(dailyMetrics, now);
+
 	sessionMetrics.lastAttemptAt = now;
 	dailyMetrics.lastAttemptAt = now;
 	persistDailyMetrics(rolledDay);
@@ -533,7 +593,8 @@ function escapeMarkdown(value: string): string {
 function statusBarTooltip(enabled: boolean): vscode.MarkdownString {
 	const markdown = new vscode.MarkdownString(undefined, true);
 	const now = Date.now();
-	const settingsQuery = encodeURIComponent(JSON.stringify(SECTION));
+	// Command URIs take their arguments as an encoded JSON array.
+	const settingsQuery = encodeURIComponent(JSON.stringify([SECTION]));
 
 	// Command execution remains opt-in: only the footer links below can run.
 	markdown.isTrusted = { enabledCommands: DASHBOARD_COMMANDS };
@@ -615,6 +676,12 @@ function refreshTooltip(): void {
 		return;
 	}
 
+	// Rendering can be the first thing to notice a new day, because the poll
+	// loop is not running to notice it while approval is off.
+	if (rollDailyMetricsIfNeeded()) {
+		persistDailyMetrics(true);
+	}
+
 	const tooltip = statusBarTooltip(isEnabled());
 
 	if (tooltip.value === lastTooltipValue) {
@@ -688,7 +755,7 @@ function registerApprovalProbe(context: vscode.ExtensionContext): void {
 
 	if (typeof vscode.window.onDidStartTerminalShellExecution === "function") {
 		context.subscriptions.push(
-			vscode.window.onDidStartTerminalShellExecution(({ terminal, execution }) => {
+			vscode.window.onDidStartTerminalShellExecution(({ terminal }) => {
 				const sinceInvocation = lastInvocationAt === undefined ? undefined : Date.now() - lastInvocationAt;
 
 				probeMetrics.executionsStarted++;
@@ -696,12 +763,12 @@ function registerApprovalProbe(context: vscode.ExtensionContext): void {
 					probeMetrics.executionsNearInvocation++;
 				}
 
-				// Truncated because this is the user's own command line.
-				probeMetrics.lastExecution = execution.commandLine.value.slice(0, 60);
+				// This event covers every execution the host exposes, including
+				// commands the user typed, so the command line is never read:
+				// arguments routinely carry tokens and other secrets. Timing and
+				// counts answer the only question the probe exists to answer.
 				output.debug(
-					`probe: execution in '${terminal.name}' ${
-						sinceInvocation ?? "?"
-					}ms after last invocation: ${probeMetrics.lastExecution}`,
+					`probe: execution in '${terminal.name}' ${sinceInvocation ?? "?"}ms after last invocation`,
 				);
 			}),
 		);
@@ -808,7 +875,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			output.info(`shellIntegrations  ${probeMetrics.shellIntegrationsActivated}`);
 			output.info(`executionsStarted  ${probeMetrics.executionsStarted}`);
 			output.info(`executionsCorrelated ${probeMetrics.executionsNearInvocation}`);
-			output.info(`lastExecution      ${probeMetrics.lastExecution ?? "none"}`);
 			output.info("Cursor's approval command resolves the same way whether it approved a");
 			output.info("request or found nothing pending, and the pending state is renderer-only,");
 			output.info("so approvals granted cannot be counted. The probe records the terminal");
@@ -834,14 +900,29 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 				applyConfiguration();
 			}
 		}),
+		{
+			dispose: () => {
+				if (rolloverTimer !== undefined) {
+					clearTimeout(rolloverTimer);
+					rolloverTimer = undefined;
+				}
+			},
+		},
 	);
 
+	scheduleDailyRollover();
 	applyConfiguration();
 }
 
 /** Tear down polling and save the current enabled-duration checkpoint. */
 export async function deactivate(): Promise<void> {
 	stopPolling();
+
+	if (rolloverTimer !== undefined) {
+		clearTimeout(rolloverTimer);
+		rolloverTimer = undefined;
+	}
+
 	const now = Date.now();
 	rollDailyMetricsIfNeeded(new Date(now));
 	checkpointEnabledDuration(sessionMetrics, now);
@@ -851,6 +932,11 @@ export async function deactivate(): Promise<void> {
 	activeSince = undefined;
 
 	if (extensionContext) {
-		await extensionContext.globalState.update(DAILY_METRICS_KEY, dailyMetrics);
+		try {
+			await extensionContext.globalState.update(DAILY_METRICS_KEY, dailyMetrics);
+		} catch (error) {
+			// Rejecting here would fail deactivation over a lost checkpoint.
+			output.warn(`Unable to save daily metrics during shutdown: ${String(error)}`);
+		}
 	}
 }

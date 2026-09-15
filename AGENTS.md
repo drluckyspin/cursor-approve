@@ -104,6 +104,10 @@ When changing dashboard metrics, preserve these safeguards:
 - The approval probe in `registerApprovalProbe` is diagnostic only. Do not promote its terminal counts to the dashboard
   or treat them as approvals; Cursor appears to run agent commands through its own pseudoterminal service, and the
   one-second poll makes timing correlation meaningless.
+- Never read `TerminalShellExecution.commandLine` in the probe. It fires for every execution the host exposes, including
+  commands the user typed, and their arguments routinely carry tokens and other secrets.
+- Active time must accrue as it passes, not from a single start timestamp, so that time the machine spent suspended is
+  discarded rather than reported as active.
 
 ## Version and Release
 

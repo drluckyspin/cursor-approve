@@ -31,6 +31,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Show Diagnostics** could leave the previously selected Output channel in place. Revealing the panel restores that
   channel asynchronously, so the extension now selects its own channel after the view settles.
+- Active time counted hours the machine spent suspended, because it was derived from a single start timestamp. Each
+  interval is now folded in as it passes and a gap far longer than the poll interval is discarded.
+- The dashboard could report the previous day's total after midnight while automatic approval was off, since no poll was
+  running to notice the date change. The daily bucket now rolls when the dashboard is rendered and at local midnight.
+- The approval probe no longer reads terminal command lines. The event covers every execution the host exposes,
+  including commands the user typed, whose arguments routinely carry secrets.
+- Deactivation no longer rejects when the final metrics write fails; the failure is logged instead.
 
 ## [0.3.2] - 2026-09-09
 

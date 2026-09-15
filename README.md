@@ -196,6 +196,9 @@ The dashboard reports how long automatic approval has been active, because that 
 has been bypassed. **Today** covers the current local calendar day and survives an extension-host reload; **Session**
 resets when the extension host activates; **Active since** is the start of the current uninterrupted stretch.
 
+Active time accrues as it passes rather than from a single start timestamp, so time the machine spent suspended is not
+counted. A laptop left closed overnight with the toggle on does not come back reporting eight active hours.
+
 It deliberately does not report how many approvals were granted. That number is not observable: Cursor's approval
 command resolves identically whether it approved a request or found nothing pending, and the pending state lives in
 renderer-side composer services that extensions cannot read. A count of command invocations would only restate the poll
