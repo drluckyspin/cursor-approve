@@ -813,9 +813,22 @@ function formatInterval(intervalMs: number): string {
 	return intervalMs % 1000 === 0 ? `${intervalMs / 1000}s` : `${intervalMs} ms`;
 }
 
-/** Render approvals against the agent commands that ran, as `16/18`. */
-function formatApprovalRatio(approved: number, run: number): string {
-	return `${approved.toLocaleString()}/${run.toLocaleString()} Auto Approved`;
+/**
+ * Render approvals against the agent commands that ran, as `16/18`.
+ *
+ * Both sides are padded to the widest value across the rows so the slashes line
+ * up. The padding is a figure space, which is exactly one digit wide and, being
+ * outside the HTML whitespace set, is not collapsed the way a plain space in a
+ * table cell would be.
+ */
+function formatApprovalRatios(pairs: Array<readonly [approved: number, run: number]>): string[] {
+	const approved = pairs.map(([value]) => value.toLocaleString());
+	const run = pairs.map(([, value]) => value.toLocaleString());
+	const approvedWidth = Math.max(...approved.map((value) => value.length));
+	const runWidth = Math.max(...run.map((value) => value.length));
+	const pad = (value: string, width: number) => `${"\u2007".repeat(width - value.length)}${value}`;
+
+	return pairs.map((_, index) => `${pad(approved[index], approvedWidth)}/${pad(run[index], runWidth)} Auto Approved`);
 }
 
 /** Format a count with thousands separators and a matching noun. */
@@ -893,16 +906,13 @@ function statusBarTooltip(enabled: boolean): vscode.MarkdownString {
 		metrics.push(["Active since", formatClockTime(activeSince)]);
 	}
 
-	metrics.push([
-		"Current Session",
-		formatDuration(enabledDuration(sessionMetrics, now)),
-		formatApprovalRatio(sessionMetrics.commandsApproved, sessionMetrics.commandsRun),
+	const [sessionRatio, todayRatio] = formatApprovalRatios([
+		[sessionMetrics.commandsApproved, sessionMetrics.commandsRun],
+		[dailyCount("commandsApproved", now), dailyCount("commandsRun", now)],
 	]);
-	metrics.push([
-		"Total Today",
-		formatDuration(dailyActiveMs(now)),
-		formatApprovalRatio(dailyCount("commandsApproved", now), dailyCount("commandsRun", now)),
-	]);
+
+	metrics.push(["Current Session", formatDuration(enabledDuration(sessionMetrics, now)), sessionRatio]);
+	metrics.push(["Total Today", formatDuration(dailyActiveMs(now)), todayRatio]);
 
 	// A table keeps durations and counts each in their own column so they can be
 	// compared down the list. Hovers carry no table styling, so the cells render

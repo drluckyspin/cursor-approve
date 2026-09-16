@@ -188,7 +188,7 @@ Hover **Auto Approve** for a compact, theme-native dashboard:
 └──────┘  Active · run     every 1s
 
 Active since      9:12 AM
-Current Session   47m      5/12 Auto Approved
+Current Session   47m       5/12 Auto Approved
 Total Today       5h 5m    19/47 Auto Approved
 ──────────────────────────────────────────────
 Toggle On/Off · Diagnostics · Settings
