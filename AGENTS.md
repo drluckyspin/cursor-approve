@@ -104,8 +104,10 @@ When changing dashboard metrics, preserve these safeguards:
 - Agent terminal executions do reach the extension host, so the dashboard reports them as commands run. Never relabel
   that as approvals granted: the same command runs whether this extension approved it, Cursor auto-ran it from its own
   allowlist, or the user clicked Run.
-- Timing correlation is not attribution while the poll interval is one second, because an execution always falls within
-  the window. The latency buckets in diagnostics exist to test whether that could ever change.
+- Approvals are attributed by latency, and the threshold is measured rather than chosen. Commands awaiting approval
+  start within about 50ms of the invocation that released them; commands Cursor auto-ran from its allowlist or sandbox
+  land uniformly across the poll interval. Keep `APPROVAL_ATTRIBUTION_MS` well inside the interval, and re-measure with
+  the diagnostics latency buckets before changing it.
 - Never read `TerminalShellExecution.commandLine`. It fires for every execution the host exposes, including commands the
   user typed, and their arguments routinely carry tokens and other secrets. Terminal names are sufficient.
 - Active time must accrue as it passes, not from a single start timestamp, so that time the machine spent suspended is

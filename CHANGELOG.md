@@ -21,8 +21,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   session and the current day. Agent terminals are identified by the `Agent Terminal` and `Cursor (` name prefixes
   Cursor uses internally. This is evidence that work is getting through, not a count of approvals granted, because a
   command may equally have been auto-run from Cursor's own allowlist or approved by hand.
+- The dashboard reports how many of those commands this extension released, attributed by timing: a command awaiting
+  approval starts within about 50ms of the invocation that released it, while one Cursor auto-ran from its own allowlist
+  or sandbox starts at an arbitrary point in the poll cycle.
 - **Show Diagnostics** reports terminal activity per terminal name and the delay between invoking the approval command
-  and an agent command starting, to test whether an execution could ever be attributed to this extension.
+  and an agent command starting, which is the measurement the attribution threshold is derived from.
 
 ### Changed
 

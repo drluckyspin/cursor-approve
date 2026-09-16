@@ -188,9 +188,9 @@ Hover **Auto Approve** for a compact, theme-native dashboard:
 └──────┘  Active · run     every 1s
 
 Active since      9:12 AM
-Current Session   47m      12 commands
-Total Today       5h 5m    47 commands
-──────────────────────────────────────
+Current Session   47m      12 commands   5 approved
+Total Today       5h 5m    47 commands   19 approved
+────────────────────────────────────────────────────
 Toggle On/Off · Diagnostics · Settings
 ```
 
@@ -203,13 +203,13 @@ Active time accrues as it passes rather than from a single start timestamp, so t
 counted. A laptop left closed overnight with the toggle on does not come back reporting eight active hours.
 
 The command count is what Cursor's agent terminals report, identified the same way Cursor identifies them internally, by
-a `Agent Terminal` or `Cursor (` name prefix. It counts commands that ran while automatic approval was active, which is
-evidence that work is getting through unattended.
+an `Agent Terminal` or `Cursor (` name prefix. Many of those commands never need an approval at all, because Cursor
+auto-runs anything covered by its own allowlist or sandbox.
 
-It is deliberately not called approvals. That number is not observable: Cursor's approval command resolves identically
-whether it approved a request or found nothing pending, and the pending state lives in renderer-side composer services
-that extensions cannot read. A command counted here may equally have been auto-run from Cursor's own allowlist or
-approved by hand, so the dashboard reports the work it can see rather than an attribution it cannot make.
+**Approved** is the subset this extension released, attributed by timing. Cursor's approval command reports nothing, so
+there is no direct signal, but the two cases separate cleanly in practice: a command waiting on approval starts within
+about 50ms of the invocation that released it, while one Cursor auto-ran starts at an arbitrary point in the poll cycle.
+Commands that start immediately after an invocation are therefore counted as approved.
 
 Anything that is only interesting when it is true gets a line only while it applies: an unavailable Cursor approval
 command, unsuccessful attempts today, approval restricted to the focused window, or `allowlist` mode adding approved

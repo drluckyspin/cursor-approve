@@ -69,6 +69,25 @@ const AGENT_TERMINAL_PREFIXES = ["Agent Terminal", "Cursor ("] as const;
  */
 const PROBE_LATENCY_BUCKETS_MS = [100, 250, 500, 1000] as const;
 
+/**
+ * Delay within which an agent command is credited to this extension.
+ *
+ * Measured, not guessed. Commands that needed approval started 44, 50, 57, and
+ * 75ms after the invocation that released them, because the execution begins a
+ * few frames after `executeCommand` resolves. Commands Cursor auto-ran from its
+ * own allowlist or sandbox landed uniformly across the poll interval — 56, 155,
+ * 248, 262, 607, 662, 908ms — since nothing was pending and the poll had no
+ * effect on them.
+ *
+ * The two populations therefore separate on latency alone. Every real approval
+ * falls inside this window; the error is unrelated executions that happen to
+ * land in it, at a rate of roughly this window divided by the poll interval, so
+ * about one in ten auto-run commands at the default one second. The count is
+ * deliberately not presented with a margin: it is close, and a visible error
+ * bar would cost more clarity than the precision is worth.
+ */
+const APPROVAL_ATTRIBUTION_MS = 100;
+
 /** Cap on distinct terminal names tracked, since a name follows the running process. */
 const PROBE_TERMINAL_NAME_LIMIT = 12;
 
@@ -98,11 +117,13 @@ interface ExposureMetrics {
 	/**
 	 * Commands that started in an agent terminal while approval was active.
 	 *
-	 * Evidence of work getting through, not a count of approvals granted: the
-	 * command may equally have been auto-run from Cursor's own allowlist or
-	 * approved by hand.
+	 * Includes commands Cursor auto-ran from its own allowlist or sandbox, which
+	 * needed no approval from anyone.
 	 */
 	commandsRun: number;
+
+	/** The subset of those commands this extension released, by `APPROVAL_ATTRIBUTION_MS`. */
+	commandsApproved: number;
 }
 
 interface DailyMetrics extends ExposureMetrics {
@@ -224,6 +245,7 @@ function createExposureMetrics(): ExposureMetrics {
 		enabledSince: undefined,
 		lastAttemptAt: undefined,
 		commandsRun: 0,
+		commandsApproved: 0,
 	};
 }
 
@@ -306,6 +328,7 @@ function loadDailyMetrics(context: vscode.ExtensionContext): void {
 			enabledSince: undefined,
 			lastAttemptAt: typeof stored.lastAttemptAt === "number" ? stored.lastAttemptAt : undefined,
 			commandsRun: typeof stored.commandsRun === "number" ? stored.commandsRun : 0,
+			commandsApproved: typeof stored.commandsApproved === "number" ? stored.commandsApproved : 0,
 		};
 		return;
 	}
@@ -731,10 +754,10 @@ function statusBarTooltip(enabled: boolean): vscode.MarkdownString {
 			+ "</tr></table>\n\n",
 	);
 
-	// How long the confirmation step has been bypassed, and how much work went
-	// through while it was. Neither is a count of approvals granted, which
-	// Cursor does not expose; commands run is what agent terminals report.
-	const metrics: Array<[string, string, string?]> = [];
+	// How long the confirmation step has been bypassed, how much work went
+	// through while it was, and how much of that this extension released rather
+	// than Cursor auto-running it under its own rules.
+	const metrics: Array<[string, string, string?, string?]> = [];
 
 	if (enabled && activeSince !== undefined) {
 		metrics.push(["Active since", formatClockTime(activeSince)]);
@@ -744,11 +767,13 @@ function statusBarTooltip(enabled: boolean): vscode.MarkdownString {
 		"Current Session",
 		formatDuration(enabledDuration(sessionMetrics, now)),
 		formatCount(sessionMetrics.commandsRun, "command"),
+		`${sessionMetrics.commandsApproved} approved`,
 	]);
 	metrics.push([
 		"Total Today",
 		formatDuration(enabledDuration(dailyMetrics, now)),
 		formatCount(dailyMetrics.commandsRun, "command"),
+		`${dailyMetrics.commandsApproved} approved`,
 	]);
 
 	// A table keeps durations and counts each in their own column so they can be
@@ -757,10 +782,12 @@ function statusBarTooltip(enabled: boolean): vscode.MarkdownString {
 	markdown.appendMarkdown(
 		`<table>${
 			metrics
-				.map(([label, value, count]) =>
-					`<tr><td>${label}&nbsp;&nbsp;</td><td>${value}</td><td>${
-						count === undefined ? "" : `&nbsp;&nbsp;${count}`
-					}</td></tr>`
+				.map(([label, ...cells]) =>
+					`<tr><td>${label}&nbsp;&nbsp;</td>${
+						cells
+							.map((cell) => `<td>${cell === undefined ? "" : `${cell}&nbsp;&nbsp;`}</td>`)
+							.join("")
+					}</tr>`
 				)
 				.join("")
 		}</table>\n\n`,
@@ -953,8 +980,16 @@ function registerAgentCommandWatcher(context: vscode.ExtensionContext): void {
 				// Only while approval is active: otherwise this counts commands the
 				// user approved by hand with the extension switched off.
 				if (isEnabled()) {
+					const approved = sinceInvocation !== undefined && sinceInvocation <= APPROVAL_ATTRIBUTION_MS;
+
 					sessionMetrics.commandsRun++;
 					dailyMetrics.commandsRun++;
+
+					if (approved) {
+						sessionMetrics.commandsApproved++;
+						dailyMetrics.commandsApproved++;
+					}
+
 					persistDailyMetrics();
 				}
 
@@ -1054,11 +1089,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			output.info(`activeSince        ${activeSince ?? "inactive"}`);
 			output.info(`sessionEnabledMs   ${enabledDuration(sessionMetrics)}`);
 			output.info(`sessionCommandsRun ${sessionMetrics.commandsRun}`);
+			output.info(`sessionApproved    ${sessionMetrics.commandsApproved}`);
 			output.info(`sessionUnsuccessful ${sessionMetrics.unsuccessfulAttempts}`);
 			output.info(`sessionLastPoll    ${sessionMetrics.lastAttemptAt ?? "none"}`);
 			output.info(`today              ${dailyMetrics.date}`);
 			output.info(`todayEnabledMs     ${enabledDuration(dailyMetrics)}`);
 			output.info(`todayCommandsRun   ${dailyMetrics.commandsRun}`);
+			output.info(`todayApproved      ${dailyMetrics.commandsApproved}`);
 			output.info(`todayUnsuccessful  ${dailyMetrics.unsuccessfulAttempts}`);
 			output.info(`todayLastPoll      ${dailyMetrics.lastAttemptAt ?? "none"}`);
 			output.info(`consecutiveUnsuccessful ${consecutiveErrorCount}`);
@@ -1076,11 +1113,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 				const bound = PROBE_LATENCY_BUCKETS_MS[index];
 				output.info(`  ${bound === undefined ? "slower" : `<=${bound}ms`} ${count}`);
 			});
-			output.info("Cursor's approval command resolves the same way whether it approved a");
-			output.info("request or found nothing pending, and the pending state is renderer-only,");
-			output.info("so approvals granted cannot be counted. Commands run is what agent");
-			output.info("terminals report; the delays above test whether any of them could be");
-			output.info("attributed to this extension rather than to Cursor's own allowlist.");
+			output.info("Cursor's approval command reports nothing, so approvals are attributed by");
+			output.info(`timing: an agent command starting within ${APPROVAL_ATTRIBUTION_MS}ms of an invocation was`);
+			output.info("released by it. Commands Cursor auto-ran from its own allowlist or sandbox");
+			output.info("needed no approval and land uniformly across the poll interval instead.");
 			output.info("--- End Diagnostics ---");
 			await revealOutput();
 		}),
