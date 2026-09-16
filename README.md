@@ -180,19 +180,9 @@ If you prefer a filled item, set `statusBarStyle` to `background` and override t
 
 ### Status dashboard
 
-Hover **Auto Approve** for a compact, theme-native dashboard:
+Hover **Auto Approve** for a compact, theme-native dashboard. Its counts rise as the agent works:
 
-```text
-┌──────┐  Cursor Approve   v0.4.0
-│ logo │
-└──────┘  Active · run     every 1s
-
-Active since      9:12 AM
-Current Session   47m       5/12 Auto Approved
-Total Today       5h 5m    19/47 Auto Approved
-──────────────────────────────────────────────
-Toggle On/Off · Diagnostics · Settings
-```
+![The status bar hover dashboard, its approval count rising from 2 of 3 to 3 of 4 as the agent runs commands](docs/dashboard.gif)
 
 The dashboard reports how long automatic approval has been active, because that is how long Cursor's confirmation step
 has been bypassed, and how many commands ran while it was. **Total Today** covers the current local calendar day across
