@@ -813,6 +813,11 @@ function formatInterval(intervalMs: number): string {
 	return intervalMs % 1000 === 0 ? `${intervalMs / 1000}s` : `${intervalMs} ms`;
 }
 
+/** Render approvals against the agent commands that ran, as `16/18`. */
+function formatApprovalRatio(approved: number, run: number): string {
+	return `${approved.toLocaleString()}/${run.toLocaleString()} Auto Approved`;
+}
+
 /** Format a count with thousands separators and a matching noun. */
 function formatCount(count: number, noun: string): string {
 	return `${count.toLocaleString()} ${noun}${count === 1 ? "" : "s"}`;
@@ -878,10 +883,11 @@ function statusBarTooltip(enabled: boolean): vscode.MarkdownString {
 			+ "</tr></table>\n\n",
 	);
 
-	// How long the confirmation step has been bypassed, how much work went
-	// through while it was, and how much of that this extension released rather
-	// than Cursor auto-running it under its own rules.
-	const metrics: Array<[string, string, string?, string?]> = [];
+	// How long the confirmation step has been bypassed, and how much of the work
+	// that ran while it was this extension released rather than Cursor
+	// auto-running it under its own rules. The ratio carries both numbers, and
+	// the gap between them is the part worth seeing.
+	const metrics: Array<[string, string, string?]> = [];
 
 	if (enabled && activeSince !== undefined) {
 		metrics.push(["Active since", formatClockTime(activeSince)]);
@@ -890,14 +896,12 @@ function statusBarTooltip(enabled: boolean): vscode.MarkdownString {
 	metrics.push([
 		"Current Session",
 		formatDuration(enabledDuration(sessionMetrics, now)),
-		formatCount(sessionMetrics.commandsRun, "command"),
-		`${sessionMetrics.commandsApproved} approved`,
+		formatApprovalRatio(sessionMetrics.commandsApproved, sessionMetrics.commandsRun),
 	]);
 	metrics.push([
 		"Total Today",
 		formatDuration(dailyActiveMs(now)),
-		formatCount(dailyCount("commandsRun", now), "command"),
-		`${dailyCount("commandsApproved", now)} approved`,
+		formatApprovalRatio(dailyCount("commandsApproved", now), dailyCount("commandsRun", now)),
 	]);
 
 	// A table keeps durations and counts each in their own column so they can be

@@ -17,13 +17,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   carry a pill colored from the status bar's error and warning colors.
 - `cursorApprove.statusBarPriority` positions the status bar item within the right-hand group.
 - Active-time metrics persist across extension-host reloads and reset on the user's local calendar day.
-- The dashboard reports how many commands ran in Cursor's agent terminals while automatic approval was active, for the
-  session and the current day. Agent terminals are identified by the `Agent Terminal` and `Cursor (` name prefixes
-  Cursor uses internally. This is evidence that work is getting through, not a count of approvals granted, because a
-  command may equally have been auto-run from Cursor's own allowlist or approved by hand.
-- The dashboard reports how many of those commands this extension released, attributed by timing: a command awaiting
-  approval starts within about 50ms of the invocation that released it, while one Cursor auto-ran from its own allowlist
-  or sandbox starts at an arbitrary point in the poll cycle.
+- The dashboard reports approvals against the commands that ran in Cursor's agent terminals while automatic approval was
+  active, as `5/12 Auto Approved`, for the session and the current day. Agent terminals are identified by the
+  `Agent Terminal` and `Cursor (` name prefixes Cursor uses internally, and the gap between the two numbers is the work
+  Cursor auto-ran from its own allowlist or sandbox, which never needed an approval.
+- The approved figure is attributed by timing: a command awaiting approval starts within about 50ms of the invocation
+  that released it, while one Cursor auto-ran starts at an arbitrary point in the poll cycle.
 - **Show Diagnostics** reports terminal activity per terminal name and the delay between invoking the approval command
   and an agent command starting, which is the measurement the attribution threshold is derived from.
 
