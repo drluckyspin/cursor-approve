@@ -95,8 +95,11 @@ When changing dashboard metrics, preserve these safeguards:
 - Never report approvals granted. Cursor's `run(e){ await zLo(e,"run") }` handler returns nothing whether it approved a
   request or found nothing pending, no command exposes the pending-decision state, and extensions cannot read the
   `composerShellToolPendingKeybindingsActive` context key. Report active time, which is measurable.
-- Only the current local-date bucket is persisted in `ExtensionContext.globalState`; on a date rollover, enabled time
-  after local midnight belongs to the new bucket.
+- The day's totals live in `daily-metrics.json` under `globalStorageUri`, not in `globalState`. Every Cursor window runs
+  its own extension host with its own in-memory copy of `globalState`, never sees another window's writes, and
+  overwrites the shared value wholesale, which made the totals a race between windows. Keep the merge semantics: re-read
+  immediately before writing, add counts as per-window deltas, and fold active time once from the shared checkpoint so
+  concurrent windows cannot double-count a global setting.
 - Keep every dashboard value at minute granularity or coarser. The tooltip is rebuilt each tick and reassigned only when
   its rendered text changes, so a per-second value would redraw a hovered tooltip every second.
 - Restrict trusted Markdown command links to the explicit dashboard command allowlist. Keep the tooltip background

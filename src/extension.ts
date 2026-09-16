@@ -40,16 +40,31 @@ type ApproveMode = keyof typeof APPROVE_COMMANDS;
 const SECTION = "cursorApprove";
 
 /**
- * Extension-storage key for the aggregate metrics of the user's current local day.
+ * File under `globalStorageUri` holding the day's totals for every window.
  *
- * Versioned because earlier builds accrued time from a single start timestamp
- * and so counted a suspended machine as active. Reading those buckets back
- * would carry that inflation into a build that measures correctly.
+ * A file rather than `globalState`, because every Cursor window runs its own
+ * extension host: each holds its own in-memory copy of that storage, never sees
+ * another window's writes, and overwrites the shared value wholesale on its own
+ * checkpoint. With four windows open, the day's totals became whichever window
+ * happened to write last. A file can be re-read immediately before each write
+ * and merged, which is what makes the numbers add up across windows.
  */
-const DAILY_METRICS_KEY = "dailyMetrics.v2";
+const SHARED_DAILY_FILE = "daily-metrics.json";
 
-/** Limit extension-storage writes while automatic approval is active. */
-const DAILY_METRICS_PERSIST_INTERVAL_MS = 60_000;
+/** Keys from the builds that kept the day's totals in per-window storage. */
+const LEGACY_DAILY_KEYS = ["dailyMetrics", "dailyMetrics.v2"] as const;
+
+/** How often a window merges its pending counts into the shared file. */
+const SHARED_FLUSH_INTERVAL_MS = 15_000;
+
+/**
+ * Longest gap between shared checkpoints that still counts as active time.
+ *
+ * The shared clock only advances when some window flushes, so this has to
+ * exceed the flush interval; a gap beyond it means every window was suspended
+ * or closed, and that time was not active.
+ */
+const SHARED_FOLD_TOLERANCE_MS = SHARED_FLUSH_INTERVAL_MS * 3;
 
 /**
  * Terminal name prefixes Cursor uses for the terminals its agent runs commands
@@ -98,16 +113,13 @@ const OUTPUT_SETTLE_MS = 250;
 const MIN_ACTIVE_GAP_TOLERANCE_MS = 5_000;
 
 /**
- * How long automatic approval has been active, shared by the in-memory session
- * and persisted daily buckets.
+ * What this window has seen since its extension host started.
  *
- * Deliberately not a count of approvals. Cursor's approval command resolves to
- * `undefined` whether it approved a request or found nothing pending, and the
- * pending state lives in renderer-side services that extensions cannot read, so
- * the number of approvals actually granted is not observable. Counting command
- * invocations instead just restates the poll interval, so this tracks the one
- * thing that is both true and worth knowing: how long the confirmation step has
- * been bypassed.
+ * Active time is deliberately not a count of approvals granted. Cursor's
+ * approval command resolves to `undefined` whether it approved a request or
+ * found nothing pending, and the pending state lives in renderer-side services
+ * extensions cannot read, so how long the confirmation step has been bypassed
+ * is the part that can be measured directly.
  */
 interface ExposureMetrics {
 	unsuccessfulAttempts: number;
@@ -126,8 +138,28 @@ interface ExposureMetrics {
 	commandsApproved: number;
 }
 
-interface DailyMetrics extends ExposureMetrics {
+/**
+ * The local day's totals, summed across every window through the shared file.
+ *
+ * Counts add up because each window contributes only what it saw. Active time
+ * is folded once, by whichever window checkpoints next, because approval is a
+ * global setting: two windows armed for an hour is one hour of exposure, not
+ * two.
+ */
+interface SharedDailyRecord {
 	date: string;
+	activeMs: number;
+	lastCheckpointAt: number;
+	unsuccessfulAttempts: number;
+	commandsRun: number;
+	commandsApproved: number;
+}
+
+/** Counts this window has not yet merged into the shared file. */
+interface PendingDailyDelta {
+	unsuccessfulAttempts: number;
+	commandsRun: number;
+	commandsApproved: number;
 }
 
 /**
@@ -183,11 +215,17 @@ let statusBarPriority: number | undefined;
 /** Metrics reset whenever this extension host activates. */
 let sessionMetrics: ExposureMetrics = createExposureMetrics();
 
-/** Metrics persisted for the user's current local calendar day. */
-let dailyMetrics: DailyMetrics = createDailyMetrics();
+/** The shared day's totals as of this window's last merge. */
+let sharedDaily: SharedDailyRecord = createSharedDailyRecord();
 
-/** Timestamp of the last persisted daily-metrics checkpoint. */
-let lastDailyMetricsPersistedAt = 0;
+/** Counts awaiting their next merge into the shared file. */
+let pendingDaily: PendingDailyDelta = createPendingDailyDelta();
+
+/** Timestamp of this window's last successful merge. */
+let lastSharedFlushAt = 0;
+
+/** The merge currently running, since each one is a read-modify-write. */
+let sharedFlushInFlight: Promise<void> | undefined;
 
 /** Start of the current uninterrupted active stretch, for "Active since". */
 let activeSince: number | undefined;
@@ -249,8 +287,158 @@ function createExposureMetrics(): ExposureMetrics {
 	};
 }
 
-function createDailyMetrics(now = new Date()): DailyMetrics {
-	return { date: localDateKey(now), ...createExposureMetrics() };
+function createSharedDailyRecord(now = Date.now()): SharedDailyRecord {
+	return {
+		date: localDateKey(new Date(now)),
+		activeMs: 0,
+		lastCheckpointAt: now,
+		unsuccessfulAttempts: 0,
+		commandsRun: 0,
+		commandsApproved: 0,
+	};
+}
+
+function createPendingDailyDelta(): PendingDailyDelta {
+	return { unsuccessfulAttempts: 0, commandsRun: 0, commandsApproved: 0 };
+}
+
+function sharedDailyUri(): vscode.Uri | undefined {
+	return extensionContext === undefined
+		? undefined
+		: vscode.Uri.joinPath(extensionContext.globalStorageUri, SHARED_DAILY_FILE);
+}
+
+/** Read the shared record, or undefined when it is missing or unreadable. */
+async function readSharedDaily(): Promise<SharedDailyRecord | undefined> {
+	const uri = sharedDailyUri();
+	if (uri === undefined) {
+		return undefined;
+	}
+
+	try {
+		const parsed = JSON.parse(new TextDecoder().decode(await vscode.workspace.fs.readFile(uri)));
+
+		if (
+			typeof parsed?.date === "string"
+			&& typeof parsed.activeMs === "number"
+			&& typeof parsed.lastCheckpointAt === "number"
+		) {
+			return {
+				date: parsed.date,
+				activeMs: parsed.activeMs,
+				lastCheckpointAt: parsed.lastCheckpointAt,
+				unsuccessfulAttempts: typeof parsed.unsuccessfulAttempts === "number" ? parsed.unsuccessfulAttempts : 0,
+				commandsRun: typeof parsed.commandsRun === "number" ? parsed.commandsRun : 0,
+				commandsApproved: typeof parsed.commandsApproved === "number" ? parsed.commandsApproved : 0,
+			};
+		}
+	} catch {
+		// Missing on the first run, and a partial write is not worth reporting:
+		// the merge below simply starts the day over.
+	}
+
+	return undefined;
+}
+
+/** Write through a temporary file, so a reader never sees a half-written record. */
+async function writeSharedDaily(record: SharedDailyRecord): Promise<void> {
+	const uri = sharedDailyUri();
+	if (uri === undefined) {
+		return;
+	}
+
+	const temporary = uri.with({ path: `${uri.path}.${process.pid}.tmp` });
+	await vscode.workspace.fs.writeFile(temporary, new TextEncoder().encode(JSON.stringify(record)));
+	await vscode.workspace.fs.rename(temporary, uri, { overwrite: true });
+}
+
+/**
+ * Merge this window's pending counts into the shared record.
+ *
+ * Re-reads immediately before writing so concurrent windows accumulate rather
+ * than overwrite. Active time is added by whichever window gets here first,
+ * measured from the shared checkpoint, so it is counted once no matter how many
+ * windows are open.
+ */
+async function flushSharedDaily(force = false, foldActive = isEnabled()): Promise<void> {
+	if (sharedFlushInFlight !== undefined) {
+		// Wait rather than interleave: each merge is a read-modify-write, and
+		// two of them running together in one window would lose counts.
+		await sharedFlushInFlight;
+
+		if (!force) {
+			return;
+		}
+	}
+
+	if (!force && Date.now() - lastSharedFlushAt < SHARED_FLUSH_INTERVAL_MS) {
+		return;
+	}
+
+	sharedFlushInFlight = mergeSharedDaily(Date.now(), foldActive);
+
+	try {
+		await sharedFlushInFlight;
+	} finally {
+		sharedFlushInFlight = undefined;
+	}
+}
+
+/** One read-modify-write cycle against the shared record. */
+async function mergeSharedDaily(now: number, foldActive: boolean): Promise<void> {
+	const merging = pendingDaily;
+	pendingDaily = createPendingDailyDelta();
+
+	try {
+		let record = await readSharedDaily() ?? createSharedDailyRecord(now);
+
+		if (record.date !== localDateKey(new Date(now))) {
+			record = createSharedDailyRecord(now);
+		}
+
+		if (foldActive) {
+			const elapsed = now - record.lastCheckpointAt;
+			if (elapsed > 0 && elapsed <= SHARED_FOLD_TOLERANCE_MS) {
+				record.activeMs += elapsed;
+			}
+		}
+
+		record.lastCheckpointAt = now;
+		record.unsuccessfulAttempts += merging.unsuccessfulAttempts;
+		record.commandsRun += merging.commandsRun;
+		record.commandsApproved += merging.commandsApproved;
+
+		await writeSharedDaily(record);
+		sharedDaily = record;
+		lastSharedFlushAt = now;
+	} catch (error) {
+		// Put the counts back so a failed write postpones them rather than
+		// dropping them.
+		pendingDaily.unsuccessfulAttempts += merging.unsuccessfulAttempts;
+		pendingDaily.commandsRun += merging.commandsRun;
+		pendingDaily.commandsApproved += merging.commandsApproved;
+		output.warn(`Unable to update the shared daily metrics: ${String(error)}`);
+	}
+}
+
+/** True while the shared record still describes the current local day. */
+function sharedDailyIsToday(now = Date.now()): boolean {
+	return sharedDaily.date === localDateKey(new Date(now));
+}
+
+/** The day's active time, including the interval since the last shared checkpoint. */
+function dailyActiveMs(now = Date.now()): number {
+	if (!sharedDailyIsToday(now)) {
+		return 0;
+	}
+
+	const elapsed = isEnabled() ? now - sharedDaily.lastCheckpointAt : 0;
+	return sharedDaily.activeMs + (elapsed > 0 && elapsed <= SHARED_FOLD_TOLERANCE_MS ? elapsed : 0);
+}
+
+/** A day total including counts this window has not merged yet. */
+function dailyCount(field: keyof PendingDailyDelta, now = Date.now()): number {
+	return (sharedDailyIsToday(now) ? sharedDaily[field] : 0) + pendingDaily[field];
 }
 
 /**
@@ -305,35 +493,27 @@ function checkpointEnabledDuration(metrics: ExposureMetrics, now = Date.now()): 
 	metrics.enabledSince = now;
 }
 
-/**
- * Discard a stale active timestamp from an earlier extension host. VS Code
- * normally calls deactivate, but a crash must not count time while Cursor was
- * closed as enabled time.
- */
-function loadDailyMetrics(context: vscode.ExtensionContext): void {
-	const stored = context.globalState.get<DailyMetrics>(DAILY_METRICS_KEY);
-	const today = localDateKey();
-
-	if (
-		stored?.date === today
-		&& typeof stored.unsuccessfulAttempts === "number"
-		&& typeof stored.enabledDurationMs === "number"
-	) {
-		// Rebuilt field by field rather than spread so that keys from earlier
-		// versions of this shape are dropped on the next write.
-		dailyMetrics = {
-			date: today,
-			unsuccessfulAttempts: stored.unsuccessfulAttempts,
-			enabledDurationMs: stored.enabledDurationMs,
-			enabledSince: undefined,
-			lastAttemptAt: typeof stored.lastAttemptAt === "number" ? stored.lastAttemptAt : undefined,
-			commandsRun: typeof stored.commandsRun === "number" ? stored.commandsRun : 0,
-			commandsApproved: typeof stored.commandsApproved === "number" ? stored.commandsApproved : 0,
-		};
-		return;
+/** Adopt the shared record at startup so the day's totals survive a reload. */
+async function loadSharedDaily(context: vscode.ExtensionContext): Promise<void> {
+	try {
+		await vscode.workspace.fs.createDirectory(context.globalStorageUri);
+	} catch (error) {
+		output.warn(`Unable to create the extension storage directory: ${String(error)}`);
 	}
 
-	dailyMetrics = createDailyMetrics();
+	const stored = await readSharedDaily();
+
+	// A checkpoint from an earlier run must not extend into this one: the time
+	// between them is time no window was running.
+	if (stored !== undefined && stored.date === localDateKey()) {
+		sharedDaily = { ...stored, lastCheckpointAt: Date.now() };
+	}
+
+	// A window still running an older build rewrites these, so they are cleared
+	// on every activation rather than once.
+	for (const key of LEGACY_DAILY_KEYS) {
+		void context.globalState.update(key, undefined).then(undefined, () => {});
+	}
 }
 
 /**
@@ -354,101 +534,52 @@ function scheduleDailyRollover(): void {
 
 	// A second past midnight, so the new local date is unambiguous.
 	rolloverTimer = setTimeout(() => {
-		if (rollDailyMetricsIfNeeded()) {
-			persistDailyMetrics(true);
-		}
-
-		updateStatusBar();
+		void flushSharedDaily(true).finally(() => updateStatusBar());
 		scheduleDailyRollover();
 	}, midnight.getTime() - now.getTime() + 1_000);
-}
-
-/** Start a new current-day bucket whenever the local date changes. */
-function rollDailyMetricsIfNeeded(now = new Date()): boolean {
-	if (dailyMetrics.date === localDateKey(now)) {
-		return false;
-	}
-
-	dailyMetrics = createDailyMetrics(now);
-	if (isEnabled()) {
-		// The current day began at local midnight, so retain enabled time that
-		// accrued between midnight and this timer's first post-midnight tick.
-		const midnight = new Date(now);
-		midnight.setHours(0, 0, 0, 0);
-		dailyMetrics.enabledSince = midnight.getTime();
-	}
-	lastDailyMetricsPersistedAt = 0;
-	return true;
-}
-
-/** Store a checkpoint no more than once per minute unless the caller forces it. */
-function persistDailyMetrics(force = false): void {
-	if (!extensionContext) {
-		return;
-	}
-
-	const now = Date.now();
-	if (!force && now - lastDailyMetricsPersistedAt < DAILY_METRICS_PERSIST_INTERVAL_MS) {
-		return;
-	}
-
-	checkpointEnabledDuration(dailyMetrics, now);
-	lastDailyMetricsPersistedAt = now;
-	void extensionContext.globalState.update(DAILY_METRICS_KEY, dailyMetrics).then(
-		undefined,
-		(error) => output.warn(`Unable to save daily metrics: ${String(error)}`),
-	);
 }
 
 /** Start or checkpoint enabled-duration tracking when the setting changes. */
 function updateEnabledDurationTracking(enabled: boolean): void {
 	const now = Date.now();
-	const rolledDay = rollDailyMetricsIfNeeded(new Date(now));
 
 	if (enabled) {
 		sessionMetrics.enabledSince ??= now;
-		dailyMetrics.enabledSince ??= now;
 
 		// Unlike `enabledSince`, this survives duration checkpoints so the
 		// dashboard can report when the current active stretch began.
 		activeSince ??= now;
-	} else {
-		checkpointEnabledDuration(sessionMetrics, now);
-		checkpointEnabledDuration(dailyMetrics, now);
-		sessionMetrics.enabledSince = undefined;
-		dailyMetrics.enabledSince = undefined;
-		activeSince = undefined;
+		void flushSharedDaily(true);
+		return;
 	}
 
-	persistDailyMetrics(rolledDay || !enabled);
+	checkpointEnabledDuration(sessionMetrics, now);
+	sessionMetrics.enabledSince = undefined;
+	activeSince = undefined;
+
+	// Folded even though approval is now off: the interval being closed here is
+	// time it was still on, and dropping it would lose up to a flush interval
+	// on every toggle.
+	void flushSharedDaily(true, true);
 }
 
 /** Note that the poll loop ran, so diagnostics can show it is alive. */
-function recordPoll(): boolean {
+function recordPoll(): void {
 	const now = Date.now();
-	const rolledDay = rollDailyMetricsIfNeeded(new Date(now));
 
 	// Fold each interval in as it passes rather than deriving totals from one
 	// start timestamp. Checkpointing this often is what lets a suspend gap be
 	// recognized and dropped instead of being counted as active time.
 	checkpointEnabledDuration(sessionMetrics, now);
-	checkpointEnabledDuration(dailyMetrics, now);
-
 	sessionMetrics.lastAttemptAt = now;
-	dailyMetrics.lastAttemptAt = now;
-	persistDailyMetrics(rolledDay);
-	return rolledDay;
+	void flushSharedDaily();
 }
 
-/** Record a failed automatic command invocation in both visible metric buckets. */
+/** Record a failed automatic command invocation for this window and the day. */
 function recordUnsuccessfulAttempt(): void {
 	sessionMetrics.unsuccessfulAttempts++;
-	dailyMetrics.unsuccessfulAttempts++;
-
-	// Throttled rather than forced: a failure that recurs every poll would
-	// otherwise write to extension storage continuously. State transitions and
-	// shutdown still force a write, so at most one interval of counts is lost.
-	persistDailyMetrics();
+	pendingDaily.unsuccessfulAttempts++;
+	void flushSharedDaily();
 }
 
 // ---------------------------------------------------------------------------
@@ -523,16 +654,11 @@ async function tick(): Promise<void> {
 		return;
 	}
 
-	const rolledDay = recordPoll();
+	recordPoll();
 	const successful = await approveOnce("poll");
 
 	if (!successful) {
 		recordUnsuccessfulAttempt();
-		updateStatusBar();
-		return;
-	}
-
-	if (rolledDay) {
 		updateStatusBar();
 		return;
 	}
@@ -555,9 +681,7 @@ function startPolling(): void {
 
 	// Close the open checkpoint window under the interval that opened it, so a
 	// lowered interval cannot retroactively judge that window as a suspend gap.
-	const now = Date.now();
-	checkpointEnabledDuration(sessionMetrics, now);
-	checkpointEnabledDuration(dailyMetrics, now);
+	checkpointEnabledDuration(sessionMetrics, Date.now());
 	pollIntervalMs = interval;
 
 	timer = setInterval(() => void tick(), interval);
@@ -771,9 +895,9 @@ function statusBarTooltip(enabled: boolean): vscode.MarkdownString {
 	]);
 	metrics.push([
 		"Total Today",
-		formatDuration(enabledDuration(dailyMetrics, now)),
-		formatCount(dailyMetrics.commandsRun, "command"),
-		`${dailyMetrics.commandsApproved} approved`,
+		formatDuration(dailyActiveMs(now)),
+		formatCount(dailyCount("commandsRun", now), "command"),
+		`${dailyCount("commandsApproved", now)} approved`,
 	]);
 
 	// A table keeps durations and counts each in their own column so they can be
@@ -799,10 +923,10 @@ function statusBarTooltip(enabled: boolean): vscode.MarkdownString {
 		markdown.appendMarkdown(`${statusPill("Unavailable", "error")}&nbsp; Cursor approval command\n\n`);
 	}
 
-	if (dailyMetrics.unsuccessfulAttempts > 0) {
+	if (dailyCount("unsuccessfulAttempts", now) > 0) {
 		markdown.appendMarkdown(
 			`${statusPill("Failed", "warning")}&nbsp; ${
-				formatCount(dailyMetrics.unsuccessfulAttempts, "unsuccessful attempt")
+				formatCount(dailyCount("unsuccessfulAttempts", now), "unsuccessful attempt")
 			} today\n\n`,
 		);
 	}
@@ -848,12 +972,8 @@ function refreshTooltip(): void {
 		return;
 	}
 
-	// Rendering can be the first thing to notice a new day, because the poll
-	// loop is not running to notice it while approval is off.
-	if (rollDailyMetricsIfNeeded()) {
-		persistDailyMetrics(true);
-	}
-
+	// A stale record renders as zeroes for the new day rather than yesterday's
+	// totals, so rendering never has to wait for a merge to be correct.
 	const tooltip = statusBarTooltip(isEnabled());
 
 	if (tooltip.value === lastTooltipValue) {
@@ -983,14 +1103,14 @@ function registerAgentCommandWatcher(context: vscode.ExtensionContext): void {
 					const approved = sinceInvocation !== undefined && sinceInvocation <= APPROVAL_ATTRIBUTION_MS;
 
 					sessionMetrics.commandsRun++;
-					dailyMetrics.commandsRun++;
+					pendingDaily.commandsRun++;
 
 					if (approved) {
 						sessionMetrics.commandsApproved++;
-						dailyMetrics.commandsApproved++;
+						pendingDaily.commandsApproved++;
 					}
 
-					persistDailyMetrics();
+					void flushSharedDaily();
 				}
 
 				output.debug(
@@ -1044,7 +1164,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	extensionVersion = String(context.extension.packageJSON.version);
 	extensionContext = context;
 	extensionUri = context.extensionUri;
-	loadDailyMetrics(context);
+	await loadSharedDaily(context);
 
 	context.subscriptions.push(output);
 	ensureStatusBarItem();
@@ -1072,8 +1192,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		}),
 		vscode.commands.registerCommand("cursorApprove.diagnose", async () => {
 			const available = await checkCommandAvailability();
-			const rolledDay = rollDailyMetricsIfNeeded();
-			persistDailyMetrics(rolledDay);
+			await flushSharedDaily(true);
 			updateStatusBar();
 
 			output.info("--- Diagnostics ---");
@@ -1092,12 +1211,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			output.info(`sessionApproved    ${sessionMetrics.commandsApproved}`);
 			output.info(`sessionUnsuccessful ${sessionMetrics.unsuccessfulAttempts}`);
 			output.info(`sessionLastPoll    ${sessionMetrics.lastAttemptAt ?? "none"}`);
-			output.info(`today              ${dailyMetrics.date}`);
-			output.info(`todayEnabledMs     ${enabledDuration(dailyMetrics)}`);
-			output.info(`todayCommandsRun   ${dailyMetrics.commandsRun}`);
-			output.info(`todayApproved      ${dailyMetrics.commandsApproved}`);
-			output.info(`todayUnsuccessful  ${dailyMetrics.unsuccessfulAttempts}`);
-			output.info(`todayLastPoll      ${dailyMetrics.lastAttemptAt ?? "none"}`);
+			output.info("--- Shared across windows ---");
+			output.info(`today              ${sharedDaily.date}`);
+			output.info(`todayEnabledMs     ${dailyActiveMs()}`);
+			output.info(`todayCommandsRun   ${dailyCount("commandsRun")}`);
+			output.info(`todayApproved      ${dailyCount("commandsApproved")}`);
+			output.info(`todayUnsuccessful  ${dailyCount("unsuccessfulAttempts")}`);
+			output.info(`sharedCheckpoint   ${sharedDaily.lastCheckpointAt}`);
+			output.info(`sharedFile         ${sharedDailyUri()?.fsPath ?? "unavailable"}`);
 			output.info(`consecutiveUnsuccessful ${consecutiveErrorCount}`);
 			output.info(`lastUnsuccessful   ${lastError ?? "none"}`);
 			output.info("--- Approval probe (experimental) ---");
@@ -1161,20 +1282,12 @@ export async function deactivate(): Promise<void> {
 		rolloverTimer = undefined;
 	}
 
-	const now = Date.now();
-	rollDailyMetricsIfNeeded(new Date(now));
-	checkpointEnabledDuration(sessionMetrics, now);
-	checkpointEnabledDuration(dailyMetrics, now);
-	sessionMetrics.enabledSince = undefined;
-	dailyMetrics.enabledSince = undefined;
-	activeSince = undefined;
+	// Merge before the checkpoint is cleared, so this window's last interval and
+	// any unmerged counts reach the shared record. `flushSharedDaily` already
+	// logs its own failures rather than rejecting.
+	await flushSharedDaily(true);
 
-	if (extensionContext) {
-		try {
-			await extensionContext.globalState.update(DAILY_METRICS_KEY, dailyMetrics);
-		} catch (error) {
-			// Rejecting here would fail deactivation over a lost checkpoint.
-			output.warn(`Unable to save daily metrics during shutdown: ${String(error)}`);
-		}
-	}
+	checkpointEnabledDuration(sessionMetrics, Date.now());
+	sessionMetrics.enabledSince = undefined;
+	activeSince = undefined;
 }

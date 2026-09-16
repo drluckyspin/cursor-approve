@@ -195,9 +195,14 @@ Toggle On/Off · Diagnostics · Settings
 ```
 
 The dashboard reports how long automatic approval has been active, because that is how long Cursor's confirmation step
-has been bypassed, and how many commands ran while it was. **Total Today** covers the current local calendar day and
-survives an extension-host reload; **Current Session** resets when the extension host activates; **Active since** is the
-start of the current uninterrupted stretch.
+has been bypassed, and how many commands ran while it was. **Total Today** covers the current local calendar day across
+every open Cursor window and survives a reload; **Current Session** counts only this window, since its extension host
+activated; **Active since** is the start of the current uninterrupted stretch.
+
+Every window runs its own copy of the extension, so the day's totals live in a file in the extension's global storage
+that each window re-reads and merges into rather than overwrites. Counts add up across windows, while active time is
+folded once by whichever window checkpoints next: approval is a global setting, so two windows armed for an hour is one
+hour of exposure, not two.
 
 Active time accrues as it passes rather than from a single start timestamp, so time the machine spent suspended is not
 counted. A laptop left closed overnight with the toggle on does not come back reporting eight active hours.

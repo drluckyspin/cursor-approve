@@ -52,8 +52,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Active since** reports the current stretch after a suspend gap is discarded, and includes the date when the stretch
   began on an earlier day.
 - Repeated approval failures no longer force an extension-storage write on every poll.
-- Daily metrics are stored under a new key, so totals recorded by a build that counted suspended time are discarded
-  rather than carried into the corrected accounting.
+- Daily totals are shared correctly across Cursor windows. Each window runs its own extension host with its own copy of
+  `globalState` and never sees another's writes, so whichever window checkpointed last overwrote the day's numbers. The
+  totals now live in a file under the extension's global storage that each window re-reads and merges into: counts sum
+  across windows, and active time is folded once from a shared checkpoint rather than once per window.
+- Totals recorded by builds that counted suspended time or raced between windows are discarded rather than carried into
+  the corrected accounting.
 
 ## [0.3.2] - 2026-09-09
 
