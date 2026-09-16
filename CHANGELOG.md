@@ -43,6 +43,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Active since** reports the current stretch after a suspend gap is discarded, and includes the date when the stretch
   began on an earlier day.
 - Repeated approval failures no longer force an extension-storage write on every poll.
+- Daily metrics are stored under a new key, so totals recorded by a build that counted suspended time are discarded
+  rather than carried into the corrected accounting.
 
 ## [0.3.2] - 2026-09-09
 

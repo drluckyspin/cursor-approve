@@ -39,8 +39,14 @@ type ApproveMode = keyof typeof APPROVE_COMMANDS;
 /** Prefix for every `contributes.configuration` key in package.json. */
 const SECTION = "cursorApprove";
 
-/** Extension-storage key for the aggregate metrics of the user's current local day. */
-const DAILY_METRICS_KEY = "dailyMetrics";
+/**
+ * Extension-storage key for the aggregate metrics of the user's current local day.
+ *
+ * Versioned because earlier builds accrued time from a single start timestamp
+ * and so counted a suspended machine as active. Reading those buckets back
+ * would carry that inflation into a build that measures correctly.
+ */
+const DAILY_METRICS_KEY = "dailyMetrics.v2";
 
 /** Limit extension-storage writes while automatic approval is active. */
 const DAILY_METRICS_PERSIST_INTERVAL_MS = 60_000;
