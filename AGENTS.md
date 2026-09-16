@@ -101,11 +101,13 @@ When changing dashboard metrics, preserve these safeguards:
   its rendered text changes, so a per-second value would redraw a hovered tooltip every second.
 - Restrict trusted Markdown command links to the explicit dashboard command allowlist. Keep the tooltip background
   theme-controlled; extensions cannot customize it through VS Code's API.
-- The approval probe in `registerApprovalProbe` is diagnostic only. Do not promote its terminal counts to the dashboard
-  or treat them as approvals; Cursor appears to run agent commands through its own pseudoterminal service, and the
-  one-second poll makes timing correlation meaningless.
-- Never read `TerminalShellExecution.commandLine` in the probe. It fires for every execution the host exposes, including
-  commands the user typed, and their arguments routinely carry tokens and other secrets.
+- Agent terminal executions do reach the extension host, so the dashboard reports them as commands run. Never relabel
+  that as approvals granted: the same command runs whether this extension approved it, Cursor auto-ran it from its own
+  allowlist, or the user clicked Run.
+- Timing correlation is not attribution while the poll interval is one second, because an execution always falls within
+  the window. The latency buckets in diagnostics exist to test whether that could ever change.
+- Never read `TerminalShellExecution.commandLine`. It fires for every execution the host exposes, including commands the
+  user typed, and their arguments routinely carry tokens and other secrets. Terminal names are sufficient.
 - Active time must accrue as it passes, not from a single start timestamp, so that time the machine spent suspended is
   discarded rather than reported as active. The gap tolerance follows the interval that opened the current checkpoint
   window, so that changing `intervalMs` cannot retroactively reclassify that window as suspended time.

@@ -51,8 +51,23 @@ const DAILY_METRICS_KEY = "dailyMetrics.v2";
 /** Limit extension-storage writes while automatic approval is active. */
 const DAILY_METRICS_PERSIST_INTERVAL_MS = 60_000;
 
-/** How long after an invocation a terminal execution may still be related to it. */
-const PROBE_CORRELATION_MS = 2_000;
+/**
+ * Terminal name prefixes Cursor uses for the terminals its agent runs commands
+ * in. This is the same test Cursor applies internally:
+ * `name?.startsWith("Cursor (") || name?.startsWith("Agent Terminal")`.
+ */
+const AGENT_TERMINAL_PREFIXES = ["Agent Terminal", "Cursor ("] as const;
+
+/**
+ * Upper bounds for the measured delay between invoking the approval command and
+ * an agent command starting.
+ *
+ * A command this extension approves should start within a few frames of the
+ * invocation, while one Cursor auto-ran from its own allowlist starts whenever
+ * the agent asked for it. If the delays cluster tightly, attribution is
+ * possible; if they spread across the poll interval, they are coincidence.
+ */
+const PROBE_LATENCY_BUCKETS_MS = [100, 250, 500, 1000] as const;
 
 /** Cap on distinct terminal names tracked, since a name follows the running process. */
 const PROBE_TERMINAL_NAME_LIMIT = 12;
@@ -80,6 +95,14 @@ interface ExposureMetrics {
 	enabledDurationMs: number;
 	enabledSince: number | undefined;
 	lastAttemptAt: number | undefined;
+	/**
+	 * Commands that started in an agent terminal while approval was active.
+	 *
+	 * Evidence of work getting through, not a count of approvals granted: the
+	 * command may equally have been auto-run from Cursor's own allowlist or
+	 * approved by hand.
+	 */
+	commandsRun: number;
 }
 
 interface DailyMetrics extends ExposureMetrics {
@@ -98,9 +121,11 @@ interface ProbeMetrics {
 	terminalsOpened: number;
 	shellIntegrationsActivated: number;
 	executionsStarted: number;
-	executionsNearInvocation: number;
+	agentExecutions: number;
 	/** Executions per terminal name, to tell agent terminals from the user's own. */
 	executionsByTerminal: Map<string, number>;
+	/** Delay from the last invocation, bucketed by `PROBE_LATENCY_BUCKETS_MS`. */
+	latencyBuckets: number[];
 }
 
 // ---------------------------------------------------------------------------
@@ -159,8 +184,9 @@ const probeMetrics: ProbeMetrics = {
 	terminalsOpened: 0,
 	shellIntegrationsActivated: 0,
 	executionsStarted: 0,
-	executionsNearInvocation: 0,
+	agentExecutions: 0,
 	executionsByTerminal: new Map(),
+	latencyBuckets: new Array(PROBE_LATENCY_BUCKETS_MS.length + 1).fill(0),
 };
 
 // ---------------------------------------------------------------------------
@@ -197,6 +223,7 @@ function createExposureMetrics(): ExposureMetrics {
 		enabledDurationMs: 0,
 		enabledSince: undefined,
 		lastAttemptAt: undefined,
+		commandsRun: 0,
 	};
 }
 
@@ -278,6 +305,7 @@ function loadDailyMetrics(context: vscode.ExtensionContext): void {
 			enabledDurationMs: stored.enabledDurationMs,
 			enabledSince: undefined,
 			lastAttemptAt: typeof stored.lastAttemptAt === "number" ? stored.lastAttemptAt : undefined,
+			commandsRun: typeof stored.commandsRun === "number" ? stored.commandsRun : 0,
 		};
 		return;
 	}
@@ -648,6 +676,24 @@ function escapeMarkdown(value: string): string {
 	return value.replace(/([\\`*_[\]<>&])/g, "\\$1").replace(/[\r\n]+/g, " ");
 }
 
+/**
+ * Build a colored severity pill for the dashboard.
+ *
+ * The renderer's sanitizer keeps `style` only on `span`, and only accepts
+ * `color`, `background-color`, and `border-radius`, in that order, with no
+ * whitespace in the declaration, so the value below cannot be reformatted.
+ * Padding is not permitted, which is why the label is spaced with non-breaking
+ * spaces. The colors come from the status bar's own severity entries, so they
+ * stay legible in whichever theme is active.
+ */
+function statusPill(label: string, severity: "error" | "warning"): string {
+	const style = `color:var(--vscode-statusBarItem-${severity}Foreground);`
+		+ `background-color:var(--vscode-statusBarItem-${severity}Background);`
+		+ "border-radius:3px;";
+
+	return `<span style="${style}">&nbsp;${label}&nbsp;</span>`;
+}
+
 /** Build a safe, theme-native dashboard for the status bar hover tooltip. */
 function statusBarTooltip(enabled: boolean): vscode.MarkdownString {
 	const markdown = new vscode.MarkdownString(undefined, true);
@@ -660,46 +706,77 @@ function statusBarTooltip(enabled: boolean): vscode.MarkdownString {
 	markdown.supportHtml = true;
 	markdown.baseUri = extensionUri?.with({ path: `${extensionUri.path}/` });
 
-	if (extensionUri) {
-		markdown.appendMarkdown('<img src="./logo512.png" width="16" height="16" alt="" />&nbsp;&nbsp;');
-	}
+	// Identity and live state share one table so the logo can span both rows.
+	// `rowspan` survives the sanitizer, and a `td` is vertically centered by
+	// default, so the logo lines up against the pair without needing CSS.
+	// Markdown is not parsed inside raw HTML, which is why the emphasis and the
+	// mode badge are written as tags rather than as `**` and backticks.
+	const logoCell = extensionUri
+		? '<td rowspan="2"><img src="./logo512.png" width="32" height="32" align="center" alt="" />&nbsp;&nbsp;</td>'
+		: "";
 
-	// Identity on the first line, live state on the second, so the eye lands on
-	// the name and then on whether the extension is approving.
-	markdown.appendMarkdown(`**Cursor Approve**&nbsp; v${escapeMarkdown(extensionVersion)}\n\n`);
-
-	const state = [
-		`${enabled ? "$(check-all)" : "$(circle-slash)"} **${enabled ? "Active" : "Inactive"}**`,
-		`\`${currentMode()}\``,
-	];
-
-	if (timer !== undefined) {
-		state.push(`every ${formatInterval(config().get<number>("intervalMs", 1000))}`);
-	}
-
-	markdown.appendMarkdown(`${state.join(" · ")}\n\n`);
-
-	// Time active is the honest measure of what this extension does: how long the
-	// confirmation step has been bypassed. Approvals granted are not observable.
-	if (enabled && activeSince !== undefined) {
-		markdown.appendMarkdown(`Active since ${formatClockTime(activeSince)}  \n`);
-	}
+	const interval = timer === undefined
+		? ""
+		: `&nbsp;&nbsp;every ${formatInterval(config().get<number>("intervalMs", 1000))}`;
 
 	markdown.appendMarkdown(
-		`Session ${formatDuration(enabledDuration(sessionMetrics, now))} · Today ${
-			formatDuration(enabledDuration(dailyMetrics, now))
-		}\n\n`,
+		`<table><tr>${logoCell}`
+			+ "<td><strong>Cursor Approve</strong></td>"
+			+ `<td>&nbsp;&nbsp;v${escapeMarkdown(extensionVersion)}</td>`
+			+ "</tr><tr>"
+			+ `<td>${enabled ? "$(check-all)" : "$(circle-slash)"}&nbsp;<strong>${
+				enabled ? "Active" : "Inactive"
+			}</strong>&nbsp;·&nbsp;<code>${currentMode()}</code></td>`
+			+ `<td>${interval}</td>`
+			+ "</tr></table>\n\n",
+	);
+
+	// How long the confirmation step has been bypassed, and how much work went
+	// through while it was. Neither is a count of approvals granted, which
+	// Cursor does not expose; commands run is what agent terminals report.
+	const metrics: Array<[string, string, string?]> = [];
+
+	if (enabled && activeSince !== undefined) {
+		metrics.push(["Active since", formatClockTime(activeSince)]);
+	}
+
+	metrics.push([
+		"Current Session",
+		formatDuration(enabledDuration(sessionMetrics, now)),
+		formatCount(sessionMetrics.commandsRun, "command"),
+	]);
+	metrics.push([
+		"Total Today",
+		formatDuration(enabledDuration(dailyMetrics, now)),
+		formatCount(dailyMetrics.commandsRun, "command"),
+	]);
+
+	// A table keeps durations and counts each in their own column so they can be
+	// compared down the list. Hovers carry no table styling, so the cells render
+	// without borders; the sanitizer strips cellpadding, so gutters are spaces.
+	markdown.appendMarkdown(
+		`<table>${
+			metrics
+				.map(([label, value, count]) =>
+					`<tr><td>${label}&nbsp;&nbsp;</td><td>${value}</td><td>${
+						count === undefined ? "" : `&nbsp;&nbsp;${count}`
+					}</td></tr>`
+				)
+				.join("")
+		}</table>\n\n`,
 	);
 
 	// Exceptions get their own line only while they apply, so a healthy hover
 	// stays short and a real problem cannot hide among rows of zeroes.
 	if (commandAvailable === false) {
-		markdown.appendMarkdown("$(warning) Cursor approval command not available\n\n");
+		markdown.appendMarkdown(`${statusPill("Unavailable", "error")}&nbsp; Cursor approval command\n\n`);
 	}
 
 	if (dailyMetrics.unsuccessfulAttempts > 0) {
 		markdown.appendMarkdown(
-			`$(warning) ${formatCount(dailyMetrics.unsuccessfulAttempts, "unsuccessful attempt")} today\n\n`,
+			`${statusPill("Failed", "warning")}&nbsp; ${
+				formatCount(dailyMetrics.unsuccessfulAttempts, "unsuccessful attempt")
+			} today\n\n`,
 		);
 	}
 
@@ -709,14 +786,23 @@ function statusBarTooltip(enabled: boolean): vscode.MarkdownString {
 
 	// Allowlist mode outlives the session, so it deserves to be called out.
 	if (currentMode() === "allowlist") {
-		markdown.appendMarkdown("$(law) Approved commands are added to the allowlist\n\n");
+		markdown.appendMarkdown(
+			`${statusPill("Allowlist", "warning")}&nbsp; Approved commands are remembered\n\n`,
+		);
 	}
 
 	markdown.appendMarkdown("---\n\n");
+
+	// The toggle link is worded for either state. Clicking it leaves the hover
+	// open, and an open hover keeps the DOM it was rendered with: reassigning
+	// `StatusBarItem.tooltip` replaces the value for the next hover but cannot
+	// re-render the current one, and nothing in the API dismisses it. A
+	// state-specific label such as "Turn Off" would therefore contradict itself
+	// until the user moves away and hovers again.
 	markdown.appendMarkdown(
-		`[${enabled ? "$(circle-slash) Turn Off" : "$(check-all) Turn On"}](command:cursorApprove.toggle "${
-			enabled ? "Stop" : "Start"
-		} approving automatically")&nbsp; · &nbsp;[$(output) Diagnostics](command:cursorApprove.diagnose "Open the Cursor Approve output channel")&nbsp; · &nbsp;[$(gear) Settings](command:workbench.action.openSettings?${settingsQuery} "Open Cursor Approve settings")`,
+		'[$(symbol-boolean)&nbsp;Toggle On/Off](command:cursorApprove.toggle "Turn automatic approval on or off")'
+			+ '&nbsp; · &nbsp;[$(output)&nbsp;Diagnostics](command:cursorApprove.diagnose "Open the Cursor Approve output channel")'
+			+ `&nbsp; · &nbsp;[$(gear)&nbsp;Settings](command:workbench.action.openSettings?${settingsQuery} "Open Cursor Approve settings")`,
 	);
 
 	return markdown;
@@ -791,16 +877,39 @@ function applyConfiguration(): void {
 	}
 }
 
+/** Bucket how long after an invocation an agent command started. */
+function recordLatency(sinceInvocation: number | undefined): void {
+	if (sinceInvocation === undefined) {
+		return;
+	}
+
+	const bucket = PROBE_LATENCY_BUCKETS_MS.findIndex((bound) => sinceInvocation <= bound);
+	probeMetrics.latencyBuckets[bucket === -1 ? PROBE_LATENCY_BUCKETS_MS.length : bucket]++;
+}
+
+/** True for the terminals Cursor's agent runs its commands in. */
+function isAgentTerminal(terminal: vscode.Terminal): boolean {
+	return AGENT_TERMINAL_PREFIXES.some((prefix) => terminal.name.startsWith(prefix));
+}
+
 /**
- * Watch terminal activity that an approved shell tool call would produce.
+ * Count the commands Cursor's agent actually runs.
  *
- * Nothing here is shown in the dashboard or used to claim an approval happened.
- * It exists to answer one open question: whether an approval Cursor grants is
- * visible from the extension host at all. Cursor appears to run agent commands
- * through its own pseudoterminal service, in which case none of these events
- * will fire and a genuine approval count stays out of reach.
+ * These executions do reach the extension host, so the dashboard can report
+ * that work is getting through. It still cannot report approvals granted: the
+ * same command would run whether this extension approved it, Cursor auto-ran
+ * it from its own allowlist, or the user clicked Run. The probe counters
+ * alongside it measure how tightly these follow an invocation, which is what
+ * would have to hold before any stronger claim could be made.
  */
-function registerApprovalProbe(context: vscode.ExtensionContext): void {
+function registerAgentCommandWatcher(context: vscode.ExtensionContext): void {
+	// Terminals that predate activation never raise the open event, so seed the
+	// counts from the ones already present to keep the baseline honest.
+	probeMetrics.terminalsOpened = vscode.window.terminals.length;
+	probeMetrics.shellIntegrationsActivated = vscode.window.terminals.filter(
+		(terminal) => terminal.shellIntegration !== undefined,
+	).length;
+
 	context.subscriptions.push(
 		vscode.window.onDidOpenTerminal((terminal) => {
 			probeMetrics.terminalsOpened++;
@@ -824,22 +933,33 @@ function registerApprovalProbe(context: vscode.ExtensionContext): void {
 				const sinceInvocation = lastInvocationAt === undefined ? undefined : Date.now() - lastInvocationAt;
 
 				probeMetrics.executionsStarted++;
-				if (sinceInvocation !== undefined && sinceInvocation <= PROBE_CORRELATION_MS) {
-					probeMetrics.executionsNearInvocation++;
-				}
 
 				// The command line is never read: this event covers every execution
 				// the host exposes, including commands the user typed, and their
-				// arguments routinely carry tokens. The terminal name is enough to
-				// tell an agent terminal from the user's own shell, which is the
-				// open question now that these events are known to fire.
+				// arguments routinely carry tokens. The terminal name is all that is
+				// needed to tell an agent terminal from a personal shell.
 				if (probeMetrics.executionsByTerminal.size < PROBE_TERMINAL_NAME_LIMIT) {
 					const name = terminal.name;
 					probeMetrics.executionsByTerminal.set(name, (probeMetrics.executionsByTerminal.get(name) ?? 0) + 1);
 				}
 
+				if (!isAgentTerminal(terminal)) {
+					return;
+				}
+
+				probeMetrics.agentExecutions++;
+				recordLatency(sinceInvocation);
+
+				// Only while approval is active: otherwise this counts commands the
+				// user approved by hand with the extension switched off.
+				if (isEnabled()) {
+					sessionMetrics.commandsRun++;
+					dailyMetrics.commandsRun++;
+					persistDailyMetrics();
+				}
+
 				output.debug(
-					`probe: execution in '${terminal.name}' ${sinceInvocation ?? "?"}ms after last invocation`,
+					`probe: agent command in '${terminal.name}' ${sinceInvocation ?? "?"}ms after last invocation`,
 				);
 			}),
 		);
@@ -893,7 +1013,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
 	context.subscriptions.push(output);
 	ensureStatusBarItem();
-	registerApprovalProbe(context);
+	registerAgentCommandWatcher(context);
 
 	await checkCommandAvailability();
 
@@ -933,10 +1053,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			output.info(`windowFocused      ${vscode.window.state.focused}`);
 			output.info(`activeSince        ${activeSince ?? "inactive"}`);
 			output.info(`sessionEnabledMs   ${enabledDuration(sessionMetrics)}`);
+			output.info(`sessionCommandsRun ${sessionMetrics.commandsRun}`);
 			output.info(`sessionUnsuccessful ${sessionMetrics.unsuccessfulAttempts}`);
 			output.info(`sessionLastPoll    ${sessionMetrics.lastAttemptAt ?? "none"}`);
 			output.info(`today              ${dailyMetrics.date}`);
 			output.info(`todayEnabledMs     ${enabledDuration(dailyMetrics)}`);
+			output.info(`todayCommandsRun   ${dailyMetrics.commandsRun}`);
 			output.info(`todayUnsuccessful  ${dailyMetrics.unsuccessfulAttempts}`);
 			output.info(`todayLastPoll      ${dailyMetrics.lastAttemptAt ?? "none"}`);
 			output.info(`consecutiveUnsuccessful ${consecutiveErrorCount}`);
@@ -945,15 +1067,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			output.info(`terminalsOpened    ${probeMetrics.terminalsOpened}`);
 			output.info(`shellIntegrations  ${probeMetrics.shellIntegrationsActivated}`);
 			output.info(`executionsStarted  ${probeMetrics.executionsStarted}`);
-			output.info(`executionsCorrelated ${probeMetrics.executionsNearInvocation}`);
+			output.info(`agentExecutions    ${probeMetrics.agentExecutions}`);
 			for (const [name, count] of probeMetrics.executionsByTerminal) {
 				output.info(`  terminal '${name}' ${count}`);
 			}
+			output.info("Delay from the last invocation to an agent command starting:");
+			probeMetrics.latencyBuckets.forEach((count, index) => {
+				const bound = PROBE_LATENCY_BUCKETS_MS[index];
+				output.info(`  ${bound === undefined ? "slower" : `<=${bound}ms`} ${count}`);
+			});
 			output.info("Cursor's approval command resolves the same way whether it approved a");
 			output.info("request or found nothing pending, and the pending state is renderer-only,");
-			output.info("so approvals granted cannot be counted. The probe records the terminal");
-			output.info("activity an approval would cause. Correlation to an invocation is not");
-			output.info("evidence: polling every second keeps that window permanently open.");
+			output.info("so approvals granted cannot be counted. Commands run is what agent");
+			output.info("terminals report; the delays above test whether any of them could be");
+			output.info("attributed to this extension rather than to Cursor's own allowlist.");
 			output.info("--- End Diagnostics ---");
 			await revealOutput();
 		}),

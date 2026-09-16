@@ -10,13 +10,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Added
 
 - A theme-native status-bar dashboard with the extension logo, configuration state, how long automatic approval has been
-  active this session and today, and safe links to toggle approval, open diagnostics, and open settings.
+  active this session and today in an aligned column, and safe links to toggle approval, open diagnostics, and open
+  settings.
 - The dashboard reports an unavailable approval command, unsuccessful attempts, focused-window-only approval, and
-  `allowlist` mode as dedicated lines only while those conditions apply, keeping the hover readable.
+  `allowlist` mode as dedicated lines only while those conditions apply, keeping the hover readable. The severity lines
+  carry a pill colored from the status bar's error and warning colors.
 - `cursorApprove.statusBarPriority` positions the status bar item within the right-hand group.
 - Active-time metrics persist across extension-host reloads and reset on the user's local calendar day.
-- An experimental approval probe records terminal activity an approved shell tool call would produce, reported only
-  through debug logs and **Show Diagnostics**, to establish whether real approvals are observable at all.
+- The dashboard reports how many commands ran in Cursor's agent terminals while automatic approval was active, for the
+  session and the current day. Agent terminals are identified by the `Agent Terminal` and `Cursor (` name prefixes
+  Cursor uses internally. This is evidence that work is getting through, not a count of approvals granted, because a
+  command may equally have been auto-run from Cursor's own allowlist or approved by hand.
+- **Show Diagnostics** reports terminal activity per terminal name and the delay between invoking the approval command
+  and an agent command starting, to test whether an execution could ever be attributed to this extension.
 
 ### Changed
 
