@@ -814,21 +814,18 @@ function formatInterval(intervalMs: number): string {
 }
 
 /**
- * Render approvals against the agent commands that ran, as `16/18`.
+ * Render one metrics row of the dashboard.
  *
- * Both sides are padded to the widest value across the rows so the slashes line
- * up. The padding is a figure space, which is exactly one digit wide and, being
- * outside the HTML whitespace set, is not collapsed the way a plain space in a
- * table cell would be.
+ * The ratio is split across three cells, the numerator right-aligned against
+ * the slash and the denominator left-aligned after it, so the slashes and the
+ * labels that follow line up between rows. Padding the text cannot do this: the
+ * hover renders in the UI font, whose digits are proportional, so an equal
+ * count of digits is still an unequal width.
  */
-function formatApprovalRatios(pairs: Array<readonly [approved: number, run: number]>): string[] {
-	const approved = pairs.map(([value]) => value.toLocaleString());
-	const run = pairs.map(([, value]) => value.toLocaleString());
-	const approvedWidth = Math.max(...approved.map((value) => value.length));
-	const runWidth = Math.max(...run.map((value) => value.length));
-	const pad = (value: string, width: number) => `${"\u2007".repeat(width - value.length)}${value}`;
-
-	return pairs.map((_, index) => `${pad(approved[index], approvedWidth)}/${pad(run[index], runWidth)} Auto Approved`);
+function metricRow(label: string, duration: string, approved: number, run: number): string {
+	return `<tr><td>${label}&nbsp;&nbsp;</td><td>${duration}&nbsp;&nbsp;&nbsp;</td>`
+		+ `<td align="right">${approved.toLocaleString()}</td><td>/</td>`
+		+ `<td>${run.toLocaleString()}&nbsp;&nbsp;</td><td>Auto Approved</td></tr>`;
 }
 
 /** Format a count with thousands separators and a matching noun. */
@@ -900,36 +897,31 @@ function statusBarTooltip(enabled: boolean): vscode.MarkdownString {
 	// that ran while it was this extension released rather than Cursor
 	// auto-running it under its own rules. The ratio carries both numbers, and
 	// the gap between them is the part worth seeing.
-	const metrics: Array<[string, string, string?]> = [];
+	//
+	// Hovers carry no table styling, so the cells render without borders; the
+	// sanitizer strips cellpadding, so gutters are spaces.
+	const rows: string[] = [];
 
 	if (enabled && activeSince !== undefined) {
-		metrics.push(["Active since", formatClockTime(activeSince)]);
+		// Spans the remaining columns so a wide clock time cannot stretch the
+		// column the durations are compared in.
+		rows.push(`<tr><td>Active since&nbsp;&nbsp;</td><td colspan="5">${formatClockTime(activeSince)}</td></tr>`);
 	}
 
-	const [sessionRatio, todayRatio] = formatApprovalRatios([
-		[sessionMetrics.commandsApproved, sessionMetrics.commandsRun],
-		[dailyCount("commandsApproved", now), dailyCount("commandsRun", now)],
-	]);
+	rows.push(metricRow(
+		"Current Session",
+		formatDuration(enabledDuration(sessionMetrics, now)),
+		sessionMetrics.commandsApproved,
+		sessionMetrics.commandsRun,
+	));
+	rows.push(metricRow(
+		"Total Today",
+		formatDuration(dailyActiveMs(now)),
+		dailyCount("commandsApproved", now),
+		dailyCount("commandsRun", now),
+	));
 
-	metrics.push(["Current Session", formatDuration(enabledDuration(sessionMetrics, now)), sessionRatio]);
-	metrics.push(["Total Today", formatDuration(dailyActiveMs(now)), todayRatio]);
-
-	// A table keeps durations and counts each in their own column so they can be
-	// compared down the list. Hovers carry no table styling, so the cells render
-	// without borders; the sanitizer strips cellpadding, so gutters are spaces.
-	markdown.appendMarkdown(
-		`<table>${
-			metrics
-				.map(([label, ...cells]) =>
-					`<tr><td>${label}&nbsp;&nbsp;</td>${
-						cells
-							.map((cell) => `<td>${cell === undefined ? "" : `${cell}&nbsp;&nbsp;`}</td>`)
-							.join("")
-					}</tr>`
-				)
-				.join("")
-		}</table>\n\n`,
-	);
+	markdown.appendMarkdown(`<table>${rows.join("")}</table>\n\n`);
 
 	// Exceptions get their own line only while they apply, so a healthy hover
 	// stays short and a real problem cannot hide among rows of zeroes.
