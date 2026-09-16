@@ -1,6 +1,5 @@
 .github/**
 .vscode/**
-docs/full-screen-*.png
 docs/*.mov
 AGENTS.md
 Makefile

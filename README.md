@@ -15,7 +15,7 @@ When Cursor's agent wants to run a shell command or other tool, it shows an appr
 and **Skip**. Until you choose one, the session waits. That is deliberate — it stops an agent from executing commands
 you did not intend.
 
-![alt text](docs/full-screen-request.png)
+![Cursor's agent holding a tool call for approval while the status bar shows the extension active](docs/overview.gif)
 
 For unattended work — long refactors, CI fixes, overnight runs — clicking **Run** on every tool call becomes friction.
 Cursor's own mode menu offers built-in alternatives (**Auto-review**, **Run Everything**), but certain workflows still
@@ -25,17 +25,16 @@ want a per-session toggle that can be flipped on and off without changing global
 
 This is a small VS Code extension that runs inside Cursor's extension host. It does not simulate keystrokes, capture the
 screen, or scrape the pink **Run** button. Instead it calls Cursor's own workbench command — the same one bound to
-`Enter` when a tool call is pending.
-
-That makes it independent of your theme, window position, display scaling, and multi-monitor layout. It also cannot leak
-a stray `Enter` into your editor or terminal when nothing is waiting for approval.
+`Enter` when a tool call is pending. That makes it independent of your theme, window position, display scaling, and
+multi-monitor layout. It also cannot leak a stray `Enter` into your editor or terminal when nothing is waiting for
+approval.
 
 A status bar toggle shows whether automatic approval is active. Hover it for a compact dashboard, click it, use the
 Command Palette, or flip `cursorApprove.enabled` in settings.
 
-![alt text](docs/auto-approve-off.png)
+![The status bar item with automatic approval off](docs/auto-approve-off.png)
 
-![alt text](docs/auto-approve-on.png)
+![The status bar item highlighted while automatic approval is active](docs/auto-approve-on.png)
 
 ## Quick start
 
