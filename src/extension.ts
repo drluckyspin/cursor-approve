@@ -54,6 +54,9 @@ const DAILY_METRICS_PERSIST_INTERVAL_MS = 60_000;
 /** How long after an invocation a terminal execution may still be related to it. */
 const PROBE_CORRELATION_MS = 2_000;
 
+/** Cap on distinct terminal names tracked, since a name follows the running process. */
+const PROBE_TERMINAL_NAME_LIMIT = 12;
+
 /** Grace period for the Output view to finish restoring its previous channel. */
 const OUTPUT_SETTLE_MS = 250;
 
@@ -96,6 +99,8 @@ interface ProbeMetrics {
 	shellIntegrationsActivated: number;
 	executionsStarted: number;
 	executionsNearInvocation: number;
+	/** Executions per terminal name, to tell agent terminals from the user's own. */
+	executionsByTerminal: Map<string, number>;
 }
 
 // ---------------------------------------------------------------------------
@@ -155,6 +160,7 @@ const probeMetrics: ProbeMetrics = {
 	shellIntegrationsActivated: 0,
 	executionsStarted: 0,
 	executionsNearInvocation: 0,
+	executionsByTerminal: new Map(),
 };
 
 // ---------------------------------------------------------------------------
@@ -822,10 +828,16 @@ function registerApprovalProbe(context: vscode.ExtensionContext): void {
 					probeMetrics.executionsNearInvocation++;
 				}
 
-				// This event covers every execution the host exposes, including
-				// commands the user typed, so the command line is never read:
-				// arguments routinely carry tokens and other secrets. Timing and
-				// counts answer the only question the probe exists to answer.
+				// The command line is never read: this event covers every execution
+				// the host exposes, including commands the user typed, and their
+				// arguments routinely carry tokens. The terminal name is enough to
+				// tell an agent terminal from the user's own shell, which is the
+				// open question now that these events are known to fire.
+				if (probeMetrics.executionsByTerminal.size < PROBE_TERMINAL_NAME_LIMIT) {
+					const name = terminal.name;
+					probeMetrics.executionsByTerminal.set(name, (probeMetrics.executionsByTerminal.get(name) ?? 0) + 1);
+				}
+
 				output.debug(
 					`probe: execution in '${terminal.name}' ${sinceInvocation ?? "?"}ms after last invocation`,
 				);
@@ -934,10 +946,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			output.info(`shellIntegrations  ${probeMetrics.shellIntegrationsActivated}`);
 			output.info(`executionsStarted  ${probeMetrics.executionsStarted}`);
 			output.info(`executionsCorrelated ${probeMetrics.executionsNearInvocation}`);
+			for (const [name, count] of probeMetrics.executionsByTerminal) {
+				output.info(`  terminal '${name}' ${count}`);
+			}
 			output.info("Cursor's approval command resolves the same way whether it approved a");
 			output.info("request or found nothing pending, and the pending state is renderer-only,");
 			output.info("so approvals granted cannot be counted. The probe records the terminal");
-			output.info("activity an approval would cause, to test whether that ever changes.");
+			output.info("activity an approval would cause. Correlation to an invocation is not");
+			output.info("evidence: polling every second keeps that window permanently open.");
 			output.info("--- End Diagnostics ---");
 			await revealOutput();
 		}),
