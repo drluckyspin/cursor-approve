@@ -196,17 +196,20 @@ Hover **Auto Approve** for a compact, theme-native dashboard. Its counts rise as
 ![The status bar hover dashboard, its approval count rising from 2 of 3 to 3 of 4 as the agent runs commands](docs/dashboard.gif)
 
 The dashboard reports how long automatic approval has been active, because that is how long Cursor's confirmation step
-has been bypassed, and how many commands ran while it was. **Total Today** covers the current local calendar day across
-every open Cursor window and survives a reload; **Current Session** counts only this window, since its extension host
-activated; **Active since** is the start of the current uninterrupted stretch.
+has been bypassed, and how many commands ran while it was. Both rows are anchored to a start you can see:
+
+- **Active since** and **Current Window** describe the same span. The stretch begins when you switch approval on, begins
+  again when the machine wakes from a sleep long enough to prove nothing was running, and is cut at local midnight so it
+  never describes part of yesterday. Its counts restart with it.
+- **Total Today** runs from local midnight across every open Cursor window, and survives a reload.
 
 Every window runs its own copy of the extension, so the day's totals live in a file in the extension's global storage
 that each window re-reads and merges into rather than overwrites. Counts add up across windows, while active time is
 folded once by whichever window checkpoints next: approval is a global setting, so two windows armed for an hour is one
 hour of exposure, not two.
 
-Active time accrues as it passes rather than from a single start timestamp, so time the machine spent suspended is not
-counted. A laptop left closed overnight with the toggle on does not come back reporting eight active hours.
+Time the machine spent suspended is not counted in either row, so a laptop left closed overnight with the toggle on does
+not come back reporting eight active hours.
 
 `5/12 Auto Approved` reads as five of the twelve agent commands that ran were released by this extension. The total is
 what Cursor's agent terminals report, identified the same way Cursor identifies them internally, by an `Agent Terminal`

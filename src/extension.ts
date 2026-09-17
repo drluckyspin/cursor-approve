@@ -113,18 +113,16 @@ const OUTPUT_SETTLE_MS = 250;
 const MIN_ACTIVE_GAP_TOLERANCE_MS = 5_000;
 
 /**
- * What this window has seen since its extension host started.
+ * What this window has seen during the current active stretch.
  *
- * Active time is deliberately not a count of approvals granted. Cursor's
- * approval command resolves to `undefined` whether it approved a request or
- * found nothing pending, and the pending state lives in renderer-side services
- * extensions cannot read, so how long the confirmation step has been bypassed
- * is the part that can be measured directly.
+ * The stretch is the span the dashboard reports as "Active since": it starts
+ * when approval is switched on, restarts when the machine wakes from a gap long
+ * enough to prove nothing was running, and restarts again at local midnight so
+ * the figures never straddle two days. Tying the counts to the same span the
+ * clock time describes is what keeps the row self-consistent.
  */
-interface ExposureMetrics {
+interface WindowMetrics {
 	unsuccessfulAttempts: number;
-	enabledDurationMs: number;
-	enabledSince: number | undefined;
 	lastAttemptAt: number | undefined;
 	/**
 	 * Commands that started in an agent terminal while approval was active.
@@ -212,8 +210,11 @@ let commandAvailableForMode: ApproveMode | undefined;
 /** Priority the current status bar item was created with. */
 let statusBarPriority: number | undefined;
 
-/** Metrics reset whenever this extension host activates. */
-let sessionMetrics: ExposureMetrics = createExposureMetrics();
+/** Metrics for the current active stretch in this window. */
+let windowMetrics: WindowMetrics = createWindowMetrics();
+
+/** Time of the last poll, used to recognize a gap the machine slept through. */
+let lastPollAt: number | undefined;
 
 /** The shared day's totals as of this window's last merge. */
 let sharedDaily: SharedDailyRecord = createSharedDailyRecord();
@@ -276,15 +277,51 @@ function localDateKey(now = new Date()): string {
 	return `${year}-${month}-${day}`;
 }
 
-function createExposureMetrics(): ExposureMetrics {
+function createWindowMetrics(): WindowMetrics {
 	return {
 		unsuccessfulAttempts: 0,
-		enabledDurationMs: 0,
-		enabledSince: undefined,
 		lastAttemptAt: undefined,
 		commandsRun: 0,
 		commandsApproved: 0,
 	};
+}
+
+/** Local midnight that opened the day containing `now`. */
+function startOfLocalDay(now = Date.now()): number {
+	const midnight = new Date(now);
+	midnight.setHours(0, 0, 0, 0);
+	return midnight.getTime();
+}
+
+/** Begin a fresh active stretch, discarding what the previous one measured. */
+function startActiveStretch(now: number): void {
+	activeSince = now;
+	windowMetrics = createWindowMetrics();
+}
+
+/**
+ * Keep the active stretch honest on every poll.
+ *
+ * A gap far longer than the poll interval means the machine was suspended, so
+ * the stretch restarts rather than claiming to span it. A stretch is also cut
+ * at local midnight, so the window figures never describe part of yesterday
+ * while the day's figures beside them start at 00:00.
+ */
+function updateActiveStretch(now: number): void {
+	if (activeSince === undefined) {
+		startActiveStretch(now);
+	} else if (lastPollAt !== undefined && isSuspendGap(now - lastPollAt)) {
+		startActiveStretch(now);
+	} else if (activeSince < startOfLocalDay(now)) {
+		startActiveStretch(startOfLocalDay(now));
+	}
+
+	lastPollAt = now;
+}
+
+/** How long the current stretch has run, measured from what "Active since" shows. */
+function activeStretchMs(now = Date.now()): number {
+	return activeSince === undefined ? 0 : Math.max(0, now - activeSince);
 }
 
 function createSharedDailyRecord(now = Date.now()): SharedDailyRecord {
@@ -462,37 +499,6 @@ function isSuspendGap(elapsed: number): boolean {
 	return elapsed > activeGapToleranceMs();
 }
 
-/** Elapsed time since the last checkpoint, discarding suspended time. */
-function elapsedSinceCheckpoint(metrics: ExposureMetrics, now: number): number {
-	if (metrics.enabledSince === undefined) {
-		return 0;
-	}
-
-	const elapsed = now - metrics.enabledSince;
-	return elapsed > 0 && !isSuspendGap(elapsed) ? elapsed : 0;
-}
-
-/** Return accumulated enabled time, including the currently active interval. */
-function enabledDuration(metrics: ExposureMetrics, now = Date.now()): number {
-	return metrics.enabledDurationMs + elapsedSinceCheckpoint(metrics, now);
-}
-
-/** Persist elapsed enabled time into a bucket without changing whether it is active. */
-function checkpointEnabledDuration(metrics: ExposureMetrics, now = Date.now()): void {
-	if (metrics.enabledSince === undefined) {
-		return;
-	}
-
-	// Discarding a gap means the extension was not running across it, so the
-	// stretch the dashboard reports starts here rather than spanning it.
-	if (isSuspendGap(now - metrics.enabledSince)) {
-		activeSince = now;
-	}
-
-	metrics.enabledDurationMs += elapsedSinceCheckpoint(metrics, now);
-	metrics.enabledSince = now;
-}
-
 /** Adopt the shared record at startup so the day's totals survive a reload. */
 async function loadSharedDaily(context: vscode.ExtensionContext): Promise<void> {
 	try {
@@ -539,23 +545,17 @@ function scheduleDailyRollover(): void {
 	}, midnight.getTime() - now.getTime() + 1_000);
 }
 
-/** Start or checkpoint enabled-duration tracking when the setting changes. */
-function updateEnabledDurationTracking(enabled: boolean): void {
-	const now = Date.now();
-
+/** Open or close the active stretch when the setting changes. */
+function updateActiveStretchForSetting(enabled: boolean): void {
 	if (enabled) {
-		sessionMetrics.enabledSince ??= now;
-
-		// Unlike `enabledSince`, this survives duration checkpoints so the
-		// dashboard can report when the current active stretch began.
-		activeSince ??= now;
+		startActiveStretch(Date.now());
+		lastPollAt = undefined;
 		void flushSharedDaily(true);
 		return;
 	}
 
-	checkpointEnabledDuration(sessionMetrics, now);
-	sessionMetrics.enabledSince = undefined;
 	activeSince = undefined;
+	lastPollAt = undefined;
 
 	// Folded even though approval is now off: the interval being closed here is
 	// time it was still on, and dropping it would lose up to a flush interval
@@ -563,21 +563,17 @@ function updateEnabledDurationTracking(enabled: boolean): void {
 	void flushSharedDaily(true, true);
 }
 
-/** Note that the poll loop ran, so diagnostics can show it is alive. */
+/** Note that the poll loop ran, so the stretch and the day stay current. */
 function recordPoll(): void {
 	const now = Date.now();
-
-	// Fold each interval in as it passes rather than deriving totals from one
-	// start timestamp. Checkpointing this often is what lets a suspend gap be
-	// recognized and dropped instead of being counted as active time.
-	checkpointEnabledDuration(sessionMetrics, now);
-	sessionMetrics.lastAttemptAt = now;
+	updateActiveStretch(now);
+	windowMetrics.lastAttemptAt = now;
 	void flushSharedDaily();
 }
 
 /** Record a failed automatic command invocation for this window and the day. */
 function recordUnsuccessfulAttempt(): void {
-	sessionMetrics.unsuccessfulAttempts++;
+	windowMetrics.unsuccessfulAttempts++;
 	pendingDaily.unsuccessfulAttempts++;
 	void flushSharedDaily();
 }
@@ -679,9 +675,9 @@ function startPolling(): void {
 
 	const interval = config().get<number>("intervalMs", 1000);
 
-	// Close the open checkpoint window under the interval that opened it, so a
-	// lowered interval cannot retroactively judge that window as a suspend gap.
-	checkpointEnabledDuration(sessionMetrics, Date.now());
+	// Forget the previous poll before the tolerance changes with the interval,
+	// so a lowered interval cannot judge the gap it is replacing as a suspend.
+	lastPollAt = undefined;
 	pollIntervalMs = interval;
 
 	timer = setInterval(() => void tick(), interval);
@@ -902,18 +898,20 @@ function statusBarTooltip(enabled: boolean): vscode.MarkdownString {
 	// sanitizer strips cellpadding, so gutters are spaces.
 	const rows: string[] = [];
 
+	// The window row measures exactly the span "Active since" names, so the two
+	// always agree; without a stretch there is nothing for it to describe.
 	if (enabled && activeSince !== undefined) {
 		// Spans the remaining columns so a wide clock time cannot stretch the
 		// column the durations are compared in.
 		rows.push(`<tr><td>Active since&nbsp;&nbsp;</td><td colspan="5">${formatClockTime(activeSince)}</td></tr>`);
+		rows.push(metricRow(
+			"Current Window",
+			formatDuration(activeStretchMs(now)),
+			windowMetrics.commandsApproved,
+			windowMetrics.commandsRun,
+		));
 	}
 
-	rows.push(metricRow(
-		"Current Session",
-		formatDuration(enabledDuration(sessionMetrics, now)),
-		sessionMetrics.commandsApproved,
-		sessionMetrics.commandsRun,
-	));
 	rows.push(metricRow(
 		"Total Today",
 		formatDuration(dailyActiveMs(now)),
@@ -1012,7 +1010,7 @@ function updateStatusBar(): void {
  */
 function applyConfiguration(): void {
 	const enabled = isEnabled();
-	updateEnabledDurationTracking(enabled);
+	updateActiveStretchForSetting(enabled);
 
 	if (enabled) {
 		startPolling();
@@ -1108,11 +1106,11 @@ function registerAgentCommandWatcher(context: vscode.ExtensionContext): void {
 				if (isEnabled()) {
 					const approved = sinceInvocation !== undefined && sinceInvocation <= APPROVAL_ATTRIBUTION_MS;
 
-					sessionMetrics.commandsRun++;
+					windowMetrics.commandsRun++;
 					pendingDaily.commandsRun++;
 
 					if (approved) {
-						sessionMetrics.commandsApproved++;
+						windowMetrics.commandsApproved++;
 						pendingDaily.commandsApproved++;
 					}
 
@@ -1212,11 +1210,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			output.info(`onlyWhenFocused    ${config().get<boolean>("onlyWhenFocused", false)}`);
 			output.info(`windowFocused      ${vscode.window.state.focused}`);
 			output.info(`activeSince        ${activeSince ?? "inactive"}`);
-			output.info(`sessionEnabledMs   ${enabledDuration(sessionMetrics)}`);
-			output.info(`sessionCommandsRun ${sessionMetrics.commandsRun}`);
-			output.info(`sessionApproved    ${sessionMetrics.commandsApproved}`);
-			output.info(`sessionUnsuccessful ${sessionMetrics.unsuccessfulAttempts}`);
-			output.info(`sessionLastPoll    ${sessionMetrics.lastAttemptAt ?? "none"}`);
+			output.info(`windowActiveMs     ${activeStretchMs()}`);
+			output.info(`windowCommandsRun  ${windowMetrics.commandsRun}`);
+			output.info(`windowApproved     ${windowMetrics.commandsApproved}`);
+			output.info(`windowUnsuccessful ${windowMetrics.unsuccessfulAttempts}`);
+			output.info(`windowLastPoll     ${windowMetrics.lastAttemptAt ?? "none"}`);
 			output.info("--- Shared across windows ---");
 			output.info(`today              ${sharedDaily.date}`);
 			output.info(`todayEnabledMs     ${dailyActiveMs()}`);
@@ -1288,12 +1286,11 @@ export async function deactivate(): Promise<void> {
 		rolloverTimer = undefined;
 	}
 
-	// Merge before the checkpoint is cleared, so this window's last interval and
+	// Merge before the stretch is cleared, so this window's last interval and
 	// any unmerged counts reach the shared record. `flushSharedDaily` already
 	// logs its own failures rather than rejecting.
 	await flushSharedDaily(true);
 
-	checkpointEnabledDuration(sessionMetrics, Date.now());
-	sessionMetrics.enabledSince = undefined;
 	activeSince = undefined;
+	lastPollAt = undefined;
 }

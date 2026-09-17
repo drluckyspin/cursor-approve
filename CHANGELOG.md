@@ -48,8 +48,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Deactivation no longer rejects when the final metrics write fails; the failure is logged instead.
 - Command availability now checks the command for the configured mode and is rechecked when the mode changes, so a
   missing `allowlist` command is reported instead of being masked by the `run` command's presence.
-- **Active since** reports the current stretch after a suspend gap is discarded, and includes the date when the stretch
-  began on an earlier day.
+- **Current Window** replaces the per-session row and measures exactly the span **Active since** names: it restarts when
+  the machine wakes from a suspend and is cut at local midnight, and its counts restart with it. The previous row
+  measured the extension host's lifetime, so it could report more time than the day beside it and carry yesterday's
+  approvals into this morning's figures.
 - Repeated approval failures no longer force an extension-storage write on every poll.
 - Daily totals are shared correctly across Cursor windows. Each window runs its own extension host with its own copy of
   `globalState` and never sees another's writes, so whichever window checkpointed last overwrote the day's numbers. The
