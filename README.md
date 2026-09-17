@@ -15,7 +15,7 @@ When Cursor's agent wants to run a shell command or other tool, it shows an appr
 and **Skip**. Until you choose one, the session waits. That is deliberate — it stops an agent from executing commands
 you did not intend.
 
-![Cursor's agent holding a tool call for approval while the status bar shows the extension active](docs/overview.gif)
+![Movie of Cursor Approve in action](docs/overview.gif)
 
 For unattended work — long refactors, CI fixes, overnight runs — clicking **Run** on every tool call becomes friction.
 Cursor's own mode menu offers built-in alternatives (**Auto-review**, **Run Everything**), but certain workflows still
@@ -29,12 +29,24 @@ screen, or scrape the pink **Run** button. Instead it calls Cursor's own workben
 multi-monitor layout. It also cannot leak a stray `Enter` into your editor or terminal when nothing is waiting for
 approval.
 
-A status bar toggle shows whether automatic approval is active. Hover it for a compact dashboard, click it, use the
-Command Palette, or flip `cursorApprove.enabled` in settings.
+A status bar toggle menu shows whether automatic approval is active.
 
-![The status bar item with automatic approval off](docs/auto-approve-off.png)
+<!-- markdownlint-disable MD033 -->
 
-![The status bar item highlighted while automatic approval is active](docs/auto-approve-on.png)
+<img src="docs/auto-approve-off.png" width="700" alt="The status bar item with automatic approval off" />
+
+<img src="docs/auto-approve-on.png" width="700" alt="The status bar item highlighted while automatic approval is active" />
+
+<!-- markdownlint-enable MD033 -->
+
+Hover it for a compact dashboard: the mode it is approving in and how often it polls, when it was switched on, and how
+long it has been active this session and today, each beside the share of the agent's commands it approved.
+
+The bottom row is live. **Toggle On/Off** flips approval from the hover itself, **Diagnostics** opens the full report in
+the Output panel, and **Settings** jumps to this extension's settings. Clicking the status bar item, the Command
+Palette, and `cursorApprove.enabled` toggle it from elsewhere.
+
+![The status bar hover dashboard, its approval count rising from 2 of 3 to 3 of 4 as the agent runs commands](docs/dashboard.gif)
 
 ## Quick start
 
