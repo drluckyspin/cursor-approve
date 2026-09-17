@@ -9,13 +9,13 @@ so long-running agent sessions do not stall waiting for you to click **Run**.
 
 Requires **Cursor** (not stock VS Code). Automatic approval is **off** by default.
 
+![Movie of Cursor Approve in action](docs/overview.gif)
+
 ## What is agent tool approval?
 
 When Cursor's agent wants to run a shell command or other tool, it shows an approval card with **Run**, **Always Run**,
 and **Skip**. Until you choose one, the session waits. That is deliberate — it stops an agent from executing commands
 you did not intend.
-
-![Movie of Cursor Approve in action](docs/overview.gif)
 
 For unattended work — long refactors, CI fixes, overnight runs — clicking **Run** on every tool call becomes friction.
 Cursor's own mode menu offers built-in alternatives (**Auto-review**, **Run Everything**), but certain workflows still
@@ -23,19 +23,17 @@ want a per-session toggle that can be flipped on and off without changing global
 
 ## What is this extension?
 
-This is a small VS Code extension that runs inside Cursor's extension host. It does not simulate keystrokes, capture the
-screen, or scrape the pink **Run** button. Instead it calls Cursor's own workbench command — the same one bound to
-`Enter` when a tool call is pending. That makes it independent of your theme, window position, display scaling, and
-multi-monitor layout. It also cannot leak a stray `Enter` into your editor or terminal when nothing is waiting for
-approval.
+This is a small VS Code extension that runs inside Cursor's extension host. It polls Cursor's workbench looking for the
+an agent tool call that is pending approval. It then sends "Enter" using Cursor's workbench command to effectively
+approve the "Run" button.
 
-A status bar toggle menu shows whether automatic approval is active.
+Once installed, you will see a status bar toggle menu item, that shows whether automatic approval is active or not.
 
 <!-- markdownlint-disable MD033 -->
 
-<img src="docs/auto-approve-off.png" width="700" alt="The status bar item with automatic approval off" />
+<img src="docs/auto-approve-off.png" width="700" alt="Status bar: Cursor Approve off" />
 
-<img src="docs/auto-approve-on.png" width="700" alt="The status bar item highlighted while automatic approval is active" />
+<img src="docs/auto-approve-on.png" width="700" alt="Status bar: Cursor Approve on" />
 
 <!-- markdownlint-enable MD033 -->
 
@@ -195,21 +193,25 @@ Hover **Auto Approve** for a compact, theme-native dashboard. Its counts rise as
 
 ![The status bar hover dashboard, its approval count rising from 2 of 3 to 3 of 4 as the agent runs commands](docs/dashboard.gif)
 
-The dashboard reports how long automatic approval has been active, because that is how long Cursor's confirmation step
-has been bypassed, and how many commands ran while it was. Both rows are anchored to a start you can see:
+| Row                | Measures                                                                |
+| ------------------ | ----------------------------------------------------------------------- |
+| **Active since**   | The clock time the current stretch of automatic approval began          |
+| **Current Window** | Time and commands in this window since that moment                      |
+| **Total Today**    | Time and commands since local midnight, across every open Cursor window |
 
-- **Active since** and **Current Window** describe the same span. The stretch begins when you switch approval on, begins
-  again when the machine wakes from a sleep long enough to prove nothing was running, and is cut at local midnight so it
-  never describes part of yesterday. Its counts restart with it.
-- **Total Today** runs from local midnight across every open Cursor window, and survives a reload.
+Both durations count time the extension was **running and armed**, not time on the clock, so they will not match the
+time of day. Whatever the machine spent asleep is left out, because nothing can execute while it is: on a morning where
+8h 29m had passed since midnight and the Mac had slept for 1h 04m of it, **Total Today** read 7h 25m.
+
+A stretch is what **Active since** names and **Current Window** measures. It starts when you switch approval on, starts
+again when the machine wakes from a sleep long enough to prove nothing was running, and is cut at local midnight so it
+never describes part of yesterday. Its counts restart with it, which is why **Current Window** can read `0/0` while
+**Total Today** still shows the morning's work.
 
 Every window runs its own copy of the extension, so the day's totals live in a file in the extension's global storage
 that each window re-reads and merges into rather than overwrites. Counts add up across windows, while active time is
 folded once by whichever window checkpoints next: approval is a global setting, so two windows armed for an hour is one
 hour of exposure, not two.
-
-Time the machine spent suspended is not counted in either row, so a laptop left closed overnight with the toggle on does
-not come back reporting eight active hours.
 
 `5/12 Auto Approved` reads as five of the twelve agent commands that ran were released by this extension. The total is
 what Cursor's agent terminals report, identified the same way Cursor identifies them internally, by an `Agent Terminal`
