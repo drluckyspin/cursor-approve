@@ -184,7 +184,13 @@
 			return;
 		}
 
-		void render(JSON.parse(atob(message.snapshotB64))).then((dataUrl) => {
+		// `atob` yields one Latin-1 character per byte, but the snapshot is UTF-8:
+		// a localized clock time is enough to carry non-ASCII, since en-US alone
+		// separates the meridiem with U+202F. Decode the bytes before parsing.
+		const bytes = Uint8Array.from(atob(message.snapshotB64), (character) => character.charCodeAt(0));
+		const snapshot = JSON.parse(new TextDecoder().decode(bytes));
+
+		void render(snapshot).then((dataUrl) => {
 			vscode.postMessage({ type: 'done', dataUrl });
 		}).catch((error) => {
 			vscode.postMessage({

@@ -72,6 +72,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   when the totals changed.
 - **Current Window** could include time the machine spent suspended for up to one poll interval after waking, until the
   next poll discarded the gap, while the day's total beside it had already refused to count it.
+- The copied image could render a mangled clock time. The dashboard snapshot is UTF-8 but the webview decoded it one
+  byte per character, which was enough to corrupt an en-US time, since the meridiem is separated by a narrow no-break
+  space.
+- The midnight rollover redrew the dashboard without cutting the current stretch, so a hover taken before the next poll
+  showed a window spanning yesterday beside a day total that had already reset.
+- **Approve Pending Tool Call Once** fed the approval attribution, so a command the user released by hand could be
+  counted on a row that reports automatic approvals.
+- Copying the image on Linux required `xclip` specifically. `wl-copy` is now tried as well, and the error names both
+  rather than reporting whichever ran last.
+- PowerShell is now invoked with `-Sta`, which the clipboard API requires. Windows PowerShell has defaulted to it since
+  3.0, so this is explicit rather than corrective.
 
 ## [0.3.2] - 2026-09-09
 

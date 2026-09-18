@@ -626,6 +626,14 @@ function scheduleDailyRollover(): void {
 
 	// A second past midnight, so the new local date is unambiguous.
 	rolloverTimer = setTimeout(() => {
+		// The poll loop cuts the stretch at midnight, but the redraw below runs
+		// first, and a hover taken before the next poll would otherwise show a
+		// window spanning yesterday beside a day total that had already reset.
+		const rolledAt = Date.now();
+		if (activeSince !== undefined && activeSince < startOfLocalDay(rolledAt)) {
+			startActiveStretch(startOfLocalDay(rolledAt));
+		}
+
 		void flushSharedDaily(true).finally(() => updateStatusBar());
 		scheduleDailyRollover();
 	}, midnight.getTime() - now.getTime() + 1_000);
@@ -701,7 +709,11 @@ async function checkCommandAvailability(): Promise<boolean> {
  */
 async function approveOnce(reason: string): Promise<boolean> {
 	const command = APPROVE_COMMANDS[currentMode()];
-	lastInvocationAt = Date.now();
+
+	// Only the poll loop feeds attribution. A command the user released through
+	// Approve Pending Tool Call Once was not approved automatically, so counting
+	// it would contradict the row it lands in.
+	lastInvocationAt = reason === "poll" ? Date.now() : undefined;
 
 	try {
 		await vscode.commands.executeCommand(command);
@@ -1191,18 +1203,52 @@ async function writePngToClipboard(png: Buffer): Promise<void> {
 				+ "$image = [System.Drawing.Image]::FromFile($env:CURSOR_APPROVE_PNG); "
 				+ "[System.Windows.Forms.Clipboard]::SetImage($image); "
 				+ "$image.Dispose()";
+			// `Clipboard` requires a single-threaded apartment. Windows
+			// PowerShell has defaulted to STA since 3.0, so this is explicit
+			// rather than corrective, and costs nothing if it is redundant.
 			await execFileAsync(
 				"powershell.exe",
-				["-NoProfile", "-Command", script],
+				["-NoProfile", "-Sta", "-Command", script],
 				{ env: { ...process.env, CURSOR_APPROVE_PNG: temporary } },
 			);
 			return;
 		}
 
-		await execFileAsync("xclip", ["-selection", "clipboard", "-target", "image/png", "-i", temporary]);
+		await writePngToLinuxClipboard(temporary);
 	} finally {
 		await fs.unlink(temporary).catch(() => undefined);
 	}
+}
+
+/**
+ * Put the PNG on a Linux clipboard, trying the tool the session provides.
+ *
+ * Neither helper ships with a desktop, and which one works depends on the
+ * display server, so both are attempted before giving up. The error names them
+ * rather than reporting the last failure, since the fix is to install one.
+ */
+async function writePngToLinuxClipboard(file: string): Promise<void> {
+	const candidates: [string, string[]][] = [
+		["wl-copy", ["--type", "image/png"]],
+		["xclip", ["-selection", "clipboard", "-target", "image/png", "-i", file]],
+	];
+
+	for (const [tool, args] of candidates) {
+		try {
+			if (tool === "wl-copy") {
+				// wl-copy reads the image from stdin rather than a path.
+				await execFileAsync("sh", ["-c", `wl-copy --type image/png < "${file.replace(/"/g, '\\"')}"`]);
+			} else {
+				await execFileAsync(tool, args);
+			}
+
+			return;
+		} catch {
+			// Try the next tool; the error below covers exhausting them all.
+		}
+	}
+
+	throw new Error("copying an image needs wl-copy or xclip on Linux; neither could be run");
 }
 
 function statusPill(label: string, severity: "error" | "warning"): string {
