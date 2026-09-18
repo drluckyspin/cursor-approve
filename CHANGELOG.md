@@ -83,6 +83,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   rather than reporting whichever ran last.
 - PowerShell is now invoked with `-Sta`, which the clipboard API requires. Windows PowerShell has defaulted to it since
   3.0, so this is explicit rather than corrective.
+- The PNG handed to the platform clipboard is written into a directory created by `mkdtemp` rather than to a name
+  derived from the clock. The predictable path could be pre-created as a symlink by another local process, which would
+  have made copying an image overwrite a file of that process's choosing.
 
 ## [0.3.2] - 2026-09-09
 

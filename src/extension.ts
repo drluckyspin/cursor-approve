@@ -1184,10 +1184,16 @@ async function copyDashboardToClipboard(context: vscode.ExtensionContext): Promi
 
 /** Copy PNG bytes through the platform clipboard, outside the webview. */
 async function writePngToClipboard(png: Buffer): Promise<void> {
-	const temporary = path.join(os.tmpdir(), `cursor-approve-dashboard-${Date.now()}.png`);
+	// A name derived from the clock is predictable, and writing to it would
+	// follow a symlink another local process had left in its place, which turns
+	// copying an image into overwriting a file of the attacker's choosing.
+	// `mkdtemp` gives a fresh directory with a random name and owner-only
+	// permissions, and `wx` refuses to write if anything is already there.
+	const directory = await fs.mkdtemp(path.join(os.tmpdir(), "cursor-approve-"));
+	const temporary = path.join(directory, "dashboard.png");
 
 	try {
-		await fs.writeFile(temporary, png);
+		await fs.writeFile(temporary, png, { flag: "wx" });
 
 		if (process.platform === "darwin") {
 			const escaped = temporary.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
@@ -1216,7 +1222,7 @@ async function writePngToClipboard(png: Buffer): Promise<void> {
 
 		await writePngToLinuxClipboard(temporary);
 	} finally {
-		await fs.unlink(temporary).catch(() => undefined);
+		await fs.rm(directory, { recursive: true, force: true }).catch(() => undefined);
 	}
 }
 
