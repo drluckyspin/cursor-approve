@@ -11,7 +11,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -1228,27 +1228,45 @@ async function writePngToClipboard(png: Buffer): Promise<void> {
  * rather than reporting the last failure, since the fix is to install one.
  */
 async function writePngToLinuxClipboard(file: string): Promise<void> {
-	const candidates: [string, string[]][] = [
-		["wl-copy", ["--type", "image/png"]],
-		["xclip", ["-selection", "clipboard", "-target", "image/png", "-i", file]],
-	];
+	try {
+		// wl-copy takes the image on stdin rather than as a path, so the file is
+		// handed over as the child's stdin. Never compose a shell command for
+		// this: the path comes from `os.tmpdir()`, so it is only as trustworthy
+		// as TMPDIR, and a redirect would make its contents executable.
+		const handle = await fs.open(file, "r");
 
-	for (const [tool, args] of candidates) {
 		try {
-			if (tool === "wl-copy") {
-				// wl-copy reads the image from stdin rather than a path.
-				await execFileAsync("sh", ["-c", `wl-copy --type image/png < "${file.replace(/"/g, '\\"')}"`]);
-			} else {
-				await execFileAsync(tool, args);
-			}
+			await new Promise<void>((resolve, reject) => {
+				const child = spawn("wl-copy", ["--type", "image/png"], {
+					stdio: [handle.fd, "ignore", "ignore"],
+				});
+
+				child.once("error", reject);
+				child.once("exit", (code) => {
+					// wl-copy forks to serve the selection, so the process being
+					// waited on here is the one that finished reading.
+					if (code === 0) {
+						resolve();
+					} else {
+						reject(new Error(`wl-copy exited with ${String(code)}`));
+					}
+				});
+			});
 
 			return;
-		} catch {
-			// Try the next tool; the error below covers exhausting them all.
+		} finally {
+			await handle.close();
 		}
+	} catch (error) {
+		output.debug(`wl-copy unavailable, trying xclip: ${String(error)}`);
 	}
 
-	throw new Error("copying an image needs wl-copy or xclip on Linux; neither could be run");
+	try {
+		await execFileAsync("xclip", ["-selection", "clipboard", "-target", "image/png", "-i", file]);
+	} catch (error) {
+		output.debug(`xclip unavailable: ${String(error)}`);
+		throw new Error("copying an image needs wl-copy or xclip on Linux; neither could be run");
+	}
 }
 
 function statusPill(label: string, severity: "error" | "warning"): string {
