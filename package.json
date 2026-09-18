@@ -52,6 +52,11 @@
 				"category": "Cursor Approve"
 			},
 			{
+				"command": "cursorApprove.copyDashboard",
+				"title": "Copy Dashboard Image",
+				"category": "Cursor Approve"
+			},
+			{
 				"command": "cursorApprove.listComposerCommands",
 				"title": "List Cursor Composer Commands",
 				"category": "Cursor Approve"

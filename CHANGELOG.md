@@ -10,8 +10,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Added
 
 - A theme-native status-bar dashboard with the extension logo, configuration state, how long automatic approval has been
-  active this session and today in an aligned column, and safe links to toggle approval, open diagnostics, and open
-  settings.
+  active this session and today in an aligned column, and safe links to toggle approval, open diagnostics, open
+  settings, and copy the dashboard as a PNG from the footer **camera** icon.
+- **Copy Dashboard Image** renders the hover dashboard as a theme-accurate PNG on the clipboard for bug reports or chat.
+  The Command Palette command and the footer camera icon share the same action; a short-lived editor tab opens while the
+  image is rendered, then closes automatically.
 - The dashboard reports an unavailable approval command, unsuccessful attempts, focused-window-only approval, and
   `allowlist` mode as dedicated lines only while those conditions apply, keeping the hover readable. The severity lines
   carry a pill colored from the status bar's error and warning colors.

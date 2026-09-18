@@ -11,7 +11,14 @@
  * SPDX-License-Identifier: MIT
  */
 
+import { execFile } from "node:child_process";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import { promisify } from "node:util";
 import * as vscode from "vscode";
+
+const execFileAsync = promisify(execFile);
 
 // ---------------------------------------------------------------------------
 // Cursor command surface
@@ -239,6 +246,18 @@ let lastTooltipValue: string | undefined;
 
 /** When the approval command was last invoked, used to correlate probe events. */
 let lastInvocationAt: number | undefined;
+
+/** Short-lived webview used to render a dashboard PNG for the clipboard. */
+let copyDashboardPanel: vscode.WebviewPanel | undefined;
+
+/** Cached HTML shell for the copy webview, read once at activation. */
+let copyDashboardHtmlTemplate: string | undefined;
+
+/** Logo embedded as a data URI so the webview never fetches logo512.png. */
+let exportLogoDataUri: string | undefined;
+
+/** Prevents overlapping copy runs from racing the same webview. */
+let copyDashboardInFlight = false;
 
 const probeMetrics: ProbeMetrics = {
 	terminalsOpened: 0,
@@ -697,8 +716,28 @@ type StatusBarStyle = "background" | "foreground" | "none";
 const DASHBOARD_COMMANDS = [
 	"cursorApprove.toggle",
 	"cursorApprove.diagnose",
+	"cursorApprove.copyDashboard",
 	"workbench.action.openSettings",
 ] as const;
+
+/** Timeout for the clipboard webview to render and copy. */
+const DASHBOARD_COPY_TIMEOUT_MS = 10_000;
+
+/** Plain-text dashboard snapshot passed to the clipboard webview. */
+interface DashboardSnapshot {
+	version: string;
+	enabled: boolean;
+	mode: string;
+	interval: string | undefined;
+	logoUri: string | undefined;
+	activeSince: string | undefined;
+	window: { duration: string; approved: number; run: number } | undefined;
+	today: { duration: string; approved: number; run: number };
+	alerts: Array<
+		| { kind: "pill"; label: string; severity: "error" | "warning"; detail: string }
+		| { kind: "line"; text: string }
+	>;
+}
 
 function statusBarStyle(): StatusBarStyle {
 	const style = config().get<string>("statusBarStyle", "foreground");
@@ -779,7 +818,7 @@ function ensureStatusBarItem(): vscode.StatusBarItem {
  * whenever its text changes, so a seconds component would redraw the hover
  * every second and bring back the flicker it was written to avoid.
  */
-function formatDuration(durationMs: number): string {
+function formatDurationPlain(durationMs: number): string {
 	const totalMinutes = Math.max(0, Math.floor(durationMs / 60_000));
 	const hours = Math.floor(totalMinutes / 60);
 	const minutes = totalMinutes % 60;
@@ -788,8 +827,12 @@ function formatDuration(durationMs: number): string {
 		return `${hours}h ${minutes}m`;
 	}
 
+	return totalMinutes === 0 ? "<1m" : `${totalMinutes}m`;
+}
+
+function formatDuration(durationMs: number): string {
 	// Entity rather than "<" because the dashboard renders with HTML support.
-	return totalMinutes === 0 ? "&lt;1m" : `${totalMinutes}m`;
+	return formatDurationPlain(durationMs).replace("<", "&lt;");
 }
 
 function formatClockTime(timestamp: number): string {
@@ -844,6 +887,254 @@ function escapeMarkdown(value: string): string {
  * spaces. The colors come from the status bar's own severity entries, so they
  * stay legible in whichever theme is active.
  */
+/** Read the copy webview shell and logo once so copies do not pay disk I/O. */
+async function loadCopyDashboardResources(context: vscode.ExtensionContext): Promise<void> {
+	if (copyDashboardHtmlTemplate === undefined) {
+		const htmlUri = vscode.Uri.joinPath(context.extensionUri, "media", "copy-dashboard.html");
+		copyDashboardHtmlTemplate = new TextDecoder().decode(await vscode.workspace.fs.readFile(htmlUri));
+	}
+
+	if (exportLogoDataUri === undefined) {
+		const logoUri = vscode.Uri.joinPath(context.extensionUri, "logo512.png");
+		const bytes = await vscode.workspace.fs.readFile(logoUri);
+		exportLogoDataUri = `data:image/png;base64,${Buffer.from(bytes).toString("base64")}`;
+	}
+}
+
+/** Collect the dashboard state the clipboard webview renders into a PNG. */
+function buildDashboardSnapshot(logoUri: string | undefined): DashboardSnapshot {
+	const now = Date.now();
+	const enabled = isEnabled();
+	const alerts: DashboardSnapshot["alerts"] = [];
+
+	if (commandAvailable === false) {
+		alerts.push({ kind: "pill", label: "Unavailable", severity: "error", detail: "Cursor approval command" });
+	}
+
+	if (dailyCount("unsuccessfulAttempts", now) > 0) {
+		alerts.push({
+			kind: "pill",
+			label: "Failed",
+			severity: "warning",
+			detail: `${formatCount(dailyCount("unsuccessfulAttempts", now), "unsuccessful attempt")} today`,
+		});
+	}
+
+	if (config().get<boolean>("onlyWhenFocused", false)) {
+		alerts.push({ kind: "line", text: "Approving only while this window is focused" });
+	}
+
+	if (currentMode() === "allowlist") {
+		alerts.push({
+			kind: "pill",
+			label: "Allowlist",
+			severity: "warning",
+			detail: "Approved commands are remembered",
+		});
+	}
+
+	return {
+		version: extensionVersion,
+		enabled,
+		mode: currentMode(),
+		interval: timer === undefined
+			? undefined
+			: formatInterval(config().get<number>("intervalMs", 1000)),
+		logoUri,
+		activeSince: enabled && activeSince !== undefined ? formatClockTime(activeSince) : undefined,
+		window: enabled && activeSince !== undefined
+			? {
+				duration: formatDurationPlain(activeStretchMs(now)),
+				approved: windowMetrics.commandsApproved,
+				run: windowMetrics.commandsRun,
+			}
+			: undefined,
+		today: {
+			duration: formatDurationPlain(dailyActiveMs(now)),
+			approved: dailyCount("commandsApproved", now),
+			run: dailyCount("commandsRun", now),
+		},
+		alerts,
+	};
+}
+
+/** Wait for one webview message of the given type. */
+function waitForCopyDashboardMessage(
+	panel: vscode.WebviewPanel,
+	type: string,
+	timeoutMs: number,
+): Promise<{ message?: string; dataUrl?: string }> {
+	return new Promise((resolve, reject) => {
+		const subscription = panel.webview.onDidReceiveMessage((message: {
+			type?: string;
+			message?: string;
+			dataUrl?: string;
+		}) => {
+			if (message.type === type) {
+				clearTimeout(timeout);
+				subscription.dispose();
+				resolve(message);
+			}
+		});
+
+		const timeout = setTimeout(() => {
+			subscription.dispose();
+			reject(new Error("Timed out copying dashboard"));
+		}, timeoutMs);
+	});
+}
+
+/** Create a copy webview shell and wait until its render script is ready. */
+async function createCopyDashboardPanel(context: vscode.ExtensionContext): Promise<vscode.WebviewPanel> {
+	await loadCopyDashboardResources(context);
+
+	const panel = vscode.window.createWebviewPanel(
+		"cursorApproveDashboardExport",
+		"Copy Dashboard",
+		{ viewColumn: vscode.ViewColumn.Beside, preserveFocus: true },
+		{
+			enableScripts: true,
+			retainContextWhenHidden: false,
+			localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, "media")],
+		},
+	);
+	copyDashboardPanel = panel;
+
+	panel.onDidDispose(() => {
+		if (copyDashboardPanel === panel) {
+			copyDashboardPanel = undefined;
+		}
+	});
+
+	const readyWithoutReveal = waitForCopyDashboardMessage(panel, "ready", 400);
+	panel.webview.html = copyDashboardHtmlTemplate!
+		.replaceAll("{{cspSource}}", panel.webview.cspSource);
+
+	try {
+		await readyWithoutReveal;
+	} catch {
+		// Some hosts need one visible frame before webview scripts run.
+		const readyAfterReveal = waitForCopyDashboardMessage(panel, "ready", DASHBOARD_COPY_TIMEOUT_MS);
+		panel.reveal(undefined, true);
+		await readyAfterReveal;
+	}
+
+	return panel;
+}
+
+/** Ask the copy webview to render a snapshot and return PNG bytes. */
+async function renderCopyDashboardToPng(panel: vscode.WebviewPanel, snapshotB64: string): Promise<Buffer> {
+	const message = await new Promise<{ message?: string; dataUrl?: string }>((resolve, reject) => {
+		const subscription = panel.webview.onDidReceiveMessage((incoming: {
+			type?: string;
+			message?: string;
+			dataUrl?: string;
+		}) => {
+			if (incoming.type === "done") {
+				clearTimeout(timeout);
+				subscription.dispose();
+				resolve(incoming);
+				return;
+			}
+
+			if (incoming.type === "error") {
+				clearTimeout(timeout);
+				subscription.dispose();
+				reject(new Error(incoming.message ?? "Unable to copy dashboard"));
+			}
+		});
+
+		const timeout = setTimeout(() => {
+			subscription.dispose();
+			reject(new Error("Timed out copying dashboard"));
+		}, DASHBOARD_COPY_TIMEOUT_MS);
+
+		panel.webview.postMessage({ type: "render", snapshotB64 });
+	});
+
+	if (typeof message.dataUrl !== "string") {
+		throw new Error("Unable to copy dashboard");
+	}
+
+	const marker = "data:image/png;base64,";
+	const base64 = message.dataUrl.startsWith(marker)
+		? message.dataUrl.slice(marker.length)
+		: message.dataUrl;
+	return Buffer.from(base64, "base64");
+}
+
+/**
+ * Copy a PNG of the dashboard through a short-lived webview.
+ *
+ * VS Code's clipboard API is text-only, so a webview draws the dashboard and
+ * posts PNG bytes back to the extension host.
+ */
+async function copyDashboardToClipboard(context: vscode.ExtensionContext): Promise<void> {
+	if (copyDashboardInFlight) {
+		return;
+	}
+
+	copyDashboardInFlight = true;
+
+	let panel: vscode.WebviewPanel | undefined;
+
+	try {
+		const resourcesPromise = loadCopyDashboardResources(context);
+		const flushPromise = flushSharedDaily(true);
+
+		await Promise.all([resourcesPromise, flushPromise]);
+
+		panel = await createCopyDashboardPanel(context);
+
+		const snapshotB64 = Buffer.from(JSON.stringify(buildDashboardSnapshot(exportLogoDataUri))).toString("base64");
+		const png = await renderCopyDashboardToPng(panel, snapshotB64);
+
+		// Close the tab as soon as the PNG is ready; clipboard write needs no UI.
+		panel.dispose();
+		panel = undefined;
+
+		await writePngToClipboard(png);
+	} finally {
+		panel?.dispose();
+		copyDashboardInFlight = false;
+	}
+}
+
+/** Copy PNG bytes through the platform clipboard, outside the webview. */
+async function writePngToClipboard(png: Buffer): Promise<void> {
+	const temporary = path.join(os.tmpdir(), `cursor-approve-dashboard-${Date.now()}.png`);
+
+	try {
+		await fs.writeFile(temporary, png);
+
+		if (process.platform === "darwin") {
+			const escaped = temporary.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+			await execFileAsync("osascript", [
+				"-e",
+				`set the clipboard to (read (POSIX file "${escaped}") as «class PNGf»)`,
+			]);
+			return;
+		}
+
+		if (process.platform === "win32") {
+			const script = "Add-Type -AssemblyName System.Windows.Forms; "
+				+ "$image = [System.Drawing.Image]::FromFile($env:CURSOR_APPROVE_PNG); "
+				+ "[System.Windows.Forms.Clipboard]::SetImage($image); "
+				+ "$image.Dispose()";
+			await execFileAsync(
+				"powershell.exe",
+				["-NoProfile", "-Command", script],
+				{ env: { ...process.env, CURSOR_APPROVE_PNG: temporary } },
+			);
+			return;
+		}
+
+		await execFileAsync("xclip", ["-selection", "clipboard", "-target", "image/png", "-i", temporary]);
+	} finally {
+		await fs.unlink(temporary).catch(() => undefined);
+	}
+}
+
 function statusPill(label: string, severity: "error" | "warning"): string {
 	const style = `color:var(--vscode-statusBarItem-${severity}Foreground);`
 		+ `background-color:var(--vscode-statusBarItem-${severity}Background);`
@@ -954,10 +1245,14 @@ function statusBarTooltip(enabled: boolean): vscode.MarkdownString {
 	// re-render the current one, and nothing in the API dismisses it. A
 	// state-specific label such as "Turn Off" would therefore contradict itself
 	// until the user moves away and hovers again.
+	// Markdown is not parsed inside raw HTML, so the footer stays plain Markdown.
+	// A table was tried for a right-aligned camera icon, but it left the links as
+	// literal text. The camera sits last on the row instead.
 	markdown.appendMarkdown(
 		'[$(symbol-boolean)&nbsp;Toggle On/Off](command:cursorApprove.toggle "Turn automatic approval on or off")'
 			+ '&nbsp; · &nbsp;[$(output)&nbsp;Diagnostics](command:cursorApprove.diagnose "Open the Cursor Approve output channel")'
-			+ `&nbsp; · &nbsp;[$(gear)&nbsp;Settings](command:workbench.action.openSettings?${settingsQuery} "Open Cursor Approve settings")`,
+			+ `&nbsp; · &nbsp;[$(gear)&nbsp;Settings](command:workbench.action.openSettings?${settingsQuery} "Open Cursor Approve settings")`
+			+ '&nbsp; · &nbsp;[&nbsp;&nbsp;$(device-camera)&nbsp;&nbsp;](command:cursorApprove.copyDashboard "Copy dashboard image")',
 	);
 
 	return markdown;
@@ -1169,6 +1464,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	extensionContext = context;
 	extensionUri = context.extensionUri;
 	await loadSharedDaily(context);
+	void loadCopyDashboardResources(context);
 
 	context.subscriptions.push(output);
 	ensureStatusBarItem();
@@ -1193,6 +1489,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		vscode.commands.registerCommand("cursorApprove.approveOnce", async () => {
 			await approveOnce("manual");
 			void vscode.window.setStatusBarMessage("Cursor Approve: sent approval", 2000);
+		}),
+		vscode.commands.registerCommand("cursorApprove.copyDashboard", async () => {
+			const copying = vscode.window.setStatusBarMessage("Cursor Approve: copying dashboard...", 15_000);
+
+			try {
+				await copyDashboardToClipboard(context);
+				copying.dispose();
+				void vscode.window.setStatusBarMessage("Cursor Approve: dashboard copied to clipboard", 2000);
+			} catch (error) {
+				copying.dispose();
+				const message = error instanceof Error ? error.message : String(error);
+				output.warn(`Unable to copy dashboard: ${message}`);
+				void vscode.window.showErrorMessage(`Cursor Approve: ${message}`);
+			}
 		}),
 		vscode.commands.registerCommand("cursorApprove.diagnose", async () => {
 			const available = await checkCommandAvailability();
@@ -1290,6 +1600,9 @@ export async function deactivate(): Promise<void> {
 	// any unmerged counts reach the shared record. `flushSharedDaily` already
 	// logs its own failures rather than rejecting.
 	await flushSharedDaily(true);
+
+	copyDashboardPanel?.dispose();
+	copyDashboardPanel = undefined;
 
 	activeSince = undefined;
 	lastPollAt = undefined;

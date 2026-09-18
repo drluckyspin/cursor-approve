@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8" />
+	<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data: {{cspSource}}; script-src 'unsafe-inline'; style-src 'unsafe-inline';" />
+	<title>Copy Dashboard</title>
+</head>
+<body>
+<script>
+	// VS Code's extension host can copy text but not images, so a short-lived
+	// webview draws the dashboard and posts a PNG back to the extension host.
+	// The shell stays loaded between copies; each run is a postMessage render.
+	const vscode = acquireVsCodeApi();
+
+	const fontFamily = '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+	const fontSize = 13;
+	const lineHeight = 18;
+	const padding = 12;
+	const width = 380;
+	// 2× layout pixels so pasted PNGs stay sharp on Retina displays and when zoomed.
+	const scale = 2;
+
+	function themeColor(name, fallback) {
+		const value = getComputedStyle(document.body).getPropertyValue(name).trim();
+		return value || fallback;
+	}
+
+	function loadImage(src) {
+		return new Promise((resolve, reject) => {
+			const image = new Image();
+			image.onload = () => resolve(image);
+			image.onerror = () => reject(new Error('Unable to load logo'));
+			image.src = src;
+		});
+	}
+
+	function measureText(context, text) {
+		return context.measureText(text).width;
+	}
+
+	function drawPill(context, x, y, label, severity) {
+		const foreground = themeColor(
+			`--vscode-statusBarItem-${severity}Foreground`,
+			severity === 'error' ? '#ffffff' : '#000000',
+		);
+		const background = themeColor(
+			`--vscode-statusBarItem-${severity}Background`,
+			severity === 'error' ? '#c72e2e' : '#bf8803',
+		);
+
+		context.font = `600 ${fontSize}px ${fontFamily}`;
+		const textWidth = measureText(context, label);
+		const pillWidth = textWidth + 10;
+		const pillHeight = lineHeight - 2;
+
+		context.fillStyle = background;
+		context.beginPath();
+		if (typeof context.roundRect === 'function') {
+			context.roundRect(x, y, pillWidth, pillHeight, 3);
+		} else {
+			context.rect(x, y, pillWidth, pillHeight);
+		}
+		context.fill();
+
+		context.fillStyle = foreground;
+		context.fillText(label, x + 5, y + pillHeight - 4);
+		return pillWidth + 6;
+	}
+
+	async function render(snapshot) {
+		const background = themeColor('--vscode-editorHoverWidget-background', '#252526');
+		const foreground = themeColor('--vscode-editorHoverWidget-foreground', '#cccccc');
+		const muted = themeColor('--vscode-descriptionForeground', '#9d9d9d');
+
+		const headerRows = 2;
+		let bodyLines = 0;
+
+		if (snapshot.activeSince) {
+			bodyLines += 1;
+		}
+		if (snapshot.window) {
+			bodyLines += 1;
+		}
+		bodyLines += 1;
+		bodyLines += snapshot.alerts.length;
+
+		const height = padding * 2 + (headerRows + bodyLines) * lineHeight + 4;
+		const canvas = document.createElement('canvas');
+		canvas.width = width * scale;
+		canvas.height = height * scale;
+		const context = canvas.getContext('2d');
+
+		context.scale(scale, scale);
+		context.imageSmoothingEnabled = true;
+		context.imageSmoothingQuality = 'high';
+
+		context.fillStyle = background;
+		context.fillRect(0, 0, width, height);
+
+		let y = padding + fontSize;
+		const textX = padding + 40;
+
+		if (snapshot.logoUri) {
+			try {
+				const logo = await loadImage(snapshot.logoUri);
+				context.drawImage(logo, padding, padding, 32, 32);
+			} catch {
+				// A missing logo should not block copying the metrics.
+			}
+		}
+
+		context.fillStyle = foreground;
+		context.font = `600 ${fontSize}px ${fontFamily}`;
+		context.fillText('Cursor Approve', textX, y);
+		context.font = `${fontSize}px ${fontFamily}`;
+		context.fillStyle = muted;
+		context.fillText(`v${snapshot.version}`, width - padding - measureText(context, `v${snapshot.version}`), y);
+
+		y += lineHeight;
+		context.fillStyle = foreground;
+		const stateLabel = snapshot.enabled ? 'Active' : 'Inactive';
+		context.fillText(`${stateLabel} · ${snapshot.mode}`, textX, y);
+		if (snapshot.interval) {
+			context.fillStyle = muted;
+			const intervalText = `every ${snapshot.interval}`;
+			context.fillText(intervalText, width - padding - measureText(context, intervalText), y);
+		}
+
+		y += lineHeight + 4;
+
+		context.font = `${fontSize}px ${fontFamily}`;
+		if (snapshot.activeSince) {
+			context.fillStyle = foreground;
+			context.fillText('Active since', padding, y);
+			context.fillText(snapshot.activeSince, textX + 72, y);
+			y += lineHeight;
+		}
+
+		function drawMetricRow(label, duration, approved, run) {
+			context.fillStyle = foreground;
+			context.fillText(label, padding, y);
+			context.fillText(duration, textX + 72, y);
+
+			const ratio = `${approved.toLocaleString()}/${run.toLocaleString()} Auto Approved`;
+			context.fillText(ratio, width - padding - measureText(context, ratio), y);
+			y += lineHeight;
+		}
+
+		if (snapshot.window) {
+			drawMetricRow(
+				'Current Window',
+				snapshot.window.duration,
+				snapshot.window.approved,
+				snapshot.window.run,
+			);
+		}
+
+		drawMetricRow(
+			'Total Today',
+			snapshot.today.duration,
+			snapshot.today.approved,
+			snapshot.today.run,
+		);
+
+		for (const alert of snapshot.alerts) {
+			let x = padding;
+			if (alert.kind === 'pill') {
+				x += drawPill(context, x, y - lineHeight + 2, alert.label, alert.severity);
+				context.fillStyle = foreground;
+				context.fillText(alert.detail, x, y);
+			} else {
+				context.fillStyle = foreground;
+				context.fillText(alert.text, x, y);
+			}
+			y += lineHeight;
+		}
+
+		return canvas.toDataURL('image/png');
+	}
+
+	window.addEventListener('message', (event) => {
+		const message = event.data;
+		if (message?.type !== 'render' || typeof message.snapshotB64 !== 'string') {
+			return;
+		}
+
+		void render(JSON.parse(atob(message.snapshotB64))).then((dataUrl) => {
+			vscode.postMessage({ type: 'done', dataUrl });
+		}).catch((error) => {
+			vscode.postMessage({
+				type: 'error',
+				message: error instanceof Error ? error.message : String(error),
+			});
+		});
+	});
+
+	vscode.postMessage({ type: 'ready' });
+</script>
+</body>
+</html>
