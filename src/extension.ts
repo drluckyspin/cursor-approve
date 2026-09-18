@@ -65,15 +65,6 @@ const LEGACY_DAILY_KEYS = ["dailyMetrics", "dailyMetrics.v2"] as const;
 const SHARED_FLUSH_INTERVAL_MS = 15_000;
 
 /**
- * Longest gap between shared checkpoints that still counts as active time.
- *
- * The shared clock only advances when some window flushes, so this has to
- * exceed the flush interval; a gap beyond it means every window was suspended
- * or closed, and that time was not active.
- */
-const SHARED_FOLD_TOLERANCE_MS = SHARED_FLUSH_INTERVAL_MS * 3;
-
-/**
  * Terminal name prefixes Cursor uses for the terminals its agent runs commands
  * in. This is the same test Cursor applies internally:
  * `name?.startsWith("Cursor (") || name?.startsWith("Agent Terminal")`.
@@ -244,6 +235,17 @@ let lastSharedFlushAt = 0;
 /** The merge currently running, since each one is a read-modify-write. */
 let sharedFlushInFlight: Promise<void> | undefined;
 
+/**
+ * Active time this window has banked but not yet folded into the shared record.
+ *
+ * Kept outside `windowMetrics` because restarting a stretch clears those
+ * figures, while this is time that genuinely passed and still owes a fold.
+ */
+let unfoldedActiveMs = 0;
+
+/** Whether the previous tick polled, rather than being skipped for focus. */
+let lastTickPolled = false;
+
 /** The re-read currently running, for windows that are not polling. */
 let sharedReloadInFlight: Promise<void> | undefined;
 
@@ -356,11 +358,18 @@ function updateActiveStretch(now: number): void {
 		startActiveStretch(now);
 	} else if (activeSince < startOfLocalDay(now)) {
 		startActiveStretch(startOfLocalDay(now));
-	} else if (lastPollAt !== undefined) {
-		windowMetrics.activeMs += now - lastPollAt;
+	} else if (lastPollAt !== undefined && lastTickPolled) {
+		// Only when the previous tick polled as well. A tick skipped for
+		// `onlyWhenFocused` still records `lastPollAt`, to keep the gap from
+		// reading as a suspend, so without this the first tick back in focus
+		// would bank the interval it spent in the background.
+		const elapsed = now - lastPollAt;
+		windowMetrics.activeMs += elapsed;
+		unfoldedActiveMs += elapsed;
 	}
 
 	lastPollAt = now;
+	lastTickPolled = true;
 }
 
 /**
@@ -483,7 +492,9 @@ async function flushSharedDaily(force = false, foldActive = isEnabled()): Promis
 /** One read-modify-write cycle against the shared record. */
 async function mergeSharedDaily(now: number, foldActive: boolean): Promise<void> {
 	const merging = pendingDaily;
+	const banked = unfoldedActiveMs;
 	pendingDaily = createPendingDailyDelta();
+	unfoldedActiveMs = 0;
 
 	try {
 		let record = await readSharedDaily() ?? createSharedDailyRecord(now);
@@ -493,9 +504,16 @@ async function mergeSharedDaily(now: number, foldActive: boolean): Promise<void>
 		}
 
 		if (foldActive) {
-			const elapsed = now - record.lastCheckpointAt;
-			if (elapsed > 0 && elapsed <= SHARED_FOLD_TOLERANCE_MS) {
-				record.activeMs += elapsed;
+			// Credited against what this window actually polled through, not
+			// the bare wall interval. Elapsed alone counted any gap no window
+			// was polling: a suspend, or every window sitting unfocused under
+			// `onlyWhenFocused`. Capping by elapsed is what keeps concurrent
+			// windows from folding the same interval twice, since each fold
+			// advances the checkpoint the next one measures from.
+			const credit = Math.min(Math.max(0, now - record.lastCheckpointAt), banked);
+
+			if (credit > 0) {
+				record.activeMs += credit;
 			}
 		}
 
@@ -510,6 +528,7 @@ async function mergeSharedDaily(now: number, foldActive: boolean): Promise<void>
 	} catch (error) {
 		// Put the counts back so a failed write postpones them rather than
 		// dropping them.
+		unfoldedActiveMs += banked;
 		pendingDaily.unsuccessfulAttempts += merging.unsuccessfulAttempts;
 		pendingDaily.commandsRun += merging.commandsRun;
 		pendingDaily.commandsApproved += merging.commandsApproved;
@@ -568,8 +587,10 @@ function dailyActiveMs(now = Date.now()): number {
 		return 0;
 	}
 
+	// Projected the same way the fold credits it, so the live figure and the
+	// one written at the next checkpoint agree.
 	const elapsed = isEnabled() ? now - sharedDaily.lastCheckpointAt : 0;
-	return sharedDaily.activeMs + (elapsed > 0 && elapsed <= SHARED_FOLD_TOLERANCE_MS ? elapsed : 0);
+	return sharedDaily.activeMs + Math.min(Math.max(0, elapsed), unfoldedActiveMs);
 }
 
 /** A day total including counts this window has not merged yet. */
@@ -770,8 +791,10 @@ async function tick(): Promise<void> {
 		// The loop is alive even though this tick approved nothing, so record
 		// that. Without it, working in another application for longer than the
 		// tolerance was indistinguishable from a suspend, and returning to the
-		// window threw away the stretch and its counts.
+		// window threw away the stretch and its counts. The flag keeps the
+		// interval out of the active totals all the same.
 		lastPollAt = Date.now();
+		lastTickPolled = false;
 		return;
 	}
 
@@ -1123,9 +1146,17 @@ async function createCopyDashboardPanel(context: vscode.ExtensionContext): Promi
 		await readyWithoutReveal;
 	} catch {
 		// Some hosts need one visible frame before webview scripts run.
-		const readyAfterReveal = waitForCopyDashboardMessage(panel, "ready", DASHBOARD_COPY_TIMEOUT_MS);
-		panel.reveal(undefined, true);
-		await readyAfterReveal;
+		try {
+			const readyAfterReveal = waitForCopyDashboardMessage(panel, "ready", DASHBOARD_COPY_TIMEOUT_MS);
+			panel.reveal(undefined, true);
+			await readyAfterReveal;
+		} catch (error) {
+			// The caller cannot clean this up: it holds the panel only once
+			// this resolves, so a tab left open here would never be closed and
+			// the next copy would overwrite the only reference to it.
+			panel.dispose();
+			throw error;
+		}
 	}
 
 	return panel;
@@ -1178,9 +1209,11 @@ async function renderCopyDashboardToPng(panel: vscode.WebviewPanel, snapshotB64:
  * VS Code's clipboard API is text-only, so a webview draws the dashboard and
  * posts PNG bytes back to the extension host.
  */
-async function copyDashboardToClipboard(context: vscode.ExtensionContext): Promise<void> {
+async function copyDashboardToClipboard(context: vscode.ExtensionContext): Promise<boolean> {
+	// Reported rather than swallowed, so a second invocation during a copy does
+	// not get told the clipboard was written when this call did nothing.
 	if (copyDashboardInFlight) {
-		return;
+		return false;
 	}
 
 	copyDashboardInFlight = true;
@@ -1203,6 +1236,7 @@ async function copyDashboardToClipboard(context: vscode.ExtensionContext): Promi
 		panel = undefined;
 
 		await writePngToClipboard(png);
+		return true;
 	} finally {
 		panel?.dispose();
 		copyDashboardInFlight = false;
@@ -1687,9 +1721,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			const copying = vscode.window.setStatusBarMessage("Cursor Approve: copying dashboard...", 15_000);
 
 			try {
-				await copyDashboardToClipboard(context);
+				const copied = await copyDashboardToClipboard(context);
 				copying.dispose();
-				void vscode.window.setStatusBarMessage("Cursor Approve: dashboard copied to clipboard", 2000);
+				void vscode.window.setStatusBarMessage(
+					copied
+						? "Cursor Approve: dashboard copied to clipboard"
+						: "Cursor Approve: a copy is already in progress",
+					2000,
+				);
 			} catch (error) {
 				copying.dispose();
 				const message = error instanceof Error ? error.message : String(error);

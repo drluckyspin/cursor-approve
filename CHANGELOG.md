@@ -24,8 +24,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   active, as `5/12 Auto Approved`, for the session and the current day. Agent terminals are identified by the
   `Agent Terminal` and `Cursor (` name prefixes Cursor uses internally, and the gap between the two numbers is the work
   Cursor auto-ran from its own allowlist or sandbox, which never needed an approval.
-- The approved figure is attributed by timing: a command awaiting approval starts within about 50ms of the invocation
-  that released it, while one Cursor auto-ran starts at an arbitrary point in the poll cycle.
+- The approved figure is attributed by timing: a command released by an approval is credited when it starts within 100ms
+  of the invocation, measured against observed latencies of 44 to 75ms, while one Cursor auto-ran starts at an arbitrary
+  point in the poll cycle.
 - **Show Diagnostics** reports terminal activity per terminal name and the delay between invoking the approval command
   and an agent command starting, which is the measurement the attribution threshold is derived from.
 
@@ -102,6 +103,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   since**. The span covered time the window was not checking anything — a suspend, or time in another application with
   `onlyWhenFocused` enabled — while the day's total folds only intervals a window polled through, so the two rows could
   disagree by the length of an unfocused stretch.
+- **Total Today** is credited with the time a window actually polled through rather than the bare interval since the
+  last checkpoint, which had counted any gap no window was polling. With `onlyWhenFocused` enabled, returning to an
+  unfocused window inflated the day by up to the fold tolerance.
+- The first poll after returning focus no longer banks the interval the window spent in the background.
+- A **Copy Dashboard** tab could be left open when the webview never reported itself ready, since the caller does not
+  hold the panel until it does.
+- Invoking **Copy Dashboard Image** while a copy is running reported that the clipboard had been written, when that
+  invocation did nothing.
 
 ## [0.3.2] - 2026-09-09
 

@@ -108,9 +108,10 @@ When changing dashboard metrics, preserve these safeguards:
   that as approvals granted: the same command runs whether this extension approved it, Cursor auto-ran it from its own
   allowlist, or the user clicked Run.
 - Approvals are attributed by latency, and the threshold is measured rather than chosen. Commands awaiting approval
-  start within about 50ms of the invocation that released them; commands Cursor auto-ran from its allowlist or sandbox
-  land uniformly across the poll interval. Keep `APPROVAL_ATTRIBUTION_MS` well inside the interval, and re-measure with
-  the diagnostics latency buckets before changing it.
+  started 44 to 75ms after the invocation that released them, which is why `APPROVAL_ATTRIBUTION_MS` is 100; commands
+  Cursor auto-ran from its allowlist or sandbox land uniformly across the poll interval. Quote the threshold, not the
+  observations, in anything user-facing. Keep it well inside the interval, and re-measure with the diagnostics latency
+  buckets before changing it.
 - Never read `TerminalShellExecution.commandLine`. It fires for every execution the host exposes, including commands the
   user typed, and their arguments routinely carry tokens and other secrets. Terminal names are sufficient.
 - Active time must accrue as it passes, not from a single start timestamp, so that time the machine spent suspended is
