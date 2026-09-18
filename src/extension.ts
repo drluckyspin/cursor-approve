@@ -521,6 +521,14 @@ async function mergeSharedDaily(now: number, foldActive: boolean): Promise<void>
 				record.activeMs += credit;
 				record.lastCheckpointAt = now;
 			}
+
+			// Any bank beyond the credit is dropped rather than carried, which
+			// is deliberate. Banking more than the interval means another
+			// window already credited the same wall time, and the day measures
+			// the union of the windows rather than their sum: two windows
+			// active for an hour is an hour of exposure. Carrying the
+			// remainder would let it be credited later against an interval
+			// nothing polled through, which is the inflation the cap prevents.
 		} else {
 			// Not a fold but a deliberate reset of the shared clock, on
 			// shutdown or when adopting a stored day.
@@ -699,6 +707,13 @@ function updateActiveStretchForSetting(enabled: boolean): void {
 		lastTickPolled = false;
 		void flushSharedDaily(true).finally(() => updateStatusBar());
 		return;
+	}
+
+	// Bank the part-interval since the last poll before the stretch is cleared.
+	// It was time approval was still on, and nothing else would record it, so
+	// without this every toggle lost up to one poll interval.
+	if (activeSince !== undefined) {
+		updateActiveStretch(Date.now());
 	}
 
 	activeSince = undefined;
@@ -1848,9 +1863,14 @@ export async function deactivate(): Promise<void> {
 		rolloverTimer = undefined;
 	}
 
-	// Merge before the stretch is cleared, so this window's last interval and
-	// any unmerged counts reach the shared record. `flushSharedDaily` already
-	// logs its own failures rather than rejecting.
+	// Bank the part-interval since the last poll, then merge before the stretch
+	// is cleared, so this window's last interval and any unmerged counts reach
+	// the shared record. `flushSharedDaily` already logs its own failures
+	// rather than rejecting.
+	if (activeSince !== undefined && isEnabled()) {
+		updateActiveStretch(Date.now());
+	}
+
 	await flushSharedDaily(true);
 
 	copyDashboardPanel?.dispose();

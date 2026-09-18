@@ -118,6 +118,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   through, and that window lost it.
 - Toggling automatic approval redraws the dashboard once the final merge lands, rather than leaving the previous totals
   on screen until some later event rebuilt it.
+- Turning automatic approval off, and shutting the extension host down, each dropped the part-interval since the last
+  poll. Both now bank it before the stretch is cleared, which is what their comments already claimed.
 
 ## [0.3.2] - 2026-09-09
 
