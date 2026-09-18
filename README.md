@@ -159,6 +159,12 @@ across your open Cursor windows.
 Commands Cursor auto-ran itself, through its own allowlist or sandbox, count toward the total but not the approved
 figure.
 
+The total is exact; the approved figure is close rather than certain. Cursor's approval command reports nothing back, so
+an approval is inferred from timing: a command released by an approval starts within about 100ms of one, while a command
+Cursor auto-ran lands anywhere in the check interval. Every real approval falls inside that window, so the figure can
+only ever overcount, by roughly one in ten of the commands Cursor ran on its own at the default interval. **Show
+Diagnostics** prints the timing it is derived from.
+
 A warning line appears only while it applies: an unavailable approval command, unsuccessful approval attempts,
 `onlyWhenFocused` restricting approval to the focused window, or `allowlist` mode.
 
