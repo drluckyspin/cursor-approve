@@ -95,6 +95,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   the sleep as active until that poll arrived.
 - Reloading the extension host within the fold tolerance counted the shutdown gap as active time. The corrected
   checkpoint was only held in memory, and merging re-reads the file.
+- The per-terminal breakdown in **Show Diagnostics** stopped counting once twelve distinct terminal names had been seen,
+  including for terminals already listed, so it read as activity having stopped while the totals above it kept climbing.
+  The cap now limits how many names are tracked rather than how long they are counted.
 
 ## [0.3.2] - 2026-09-09
 

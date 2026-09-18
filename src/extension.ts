@@ -1558,9 +1558,15 @@ function registerAgentCommandWatcher(context: vscode.ExtensionContext): void {
 				// the host exposes, including commands the user typed, and their
 				// arguments routinely carry tokens. The terminal name is all that is
 				// needed to tell an agent terminal from a personal shell.
-				if (probeMetrics.executionsByTerminal.size < PROBE_TERMINAL_NAME_LIMIT) {
-					const name = terminal.name;
-					probeMetrics.executionsByTerminal.set(name, (probeMetrics.executionsByTerminal.get(name) ?? 0) + 1);
+				// The cap bounds how many names are tracked, not how long they are
+				// counted: a name already present keeps incrementing, or the
+				// breakdown would freeze at the twelfth distinct name while the
+				// totals above kept climbing, and read as terminals going quiet.
+				const name = terminal.name;
+				const seen = probeMetrics.executionsByTerminal.get(name);
+
+				if (seen !== undefined || probeMetrics.executionsByTerminal.size < PROBE_TERMINAL_NAME_LIMIT) {
+					probeMetrics.executionsByTerminal.set(name, (seen ?? 0) + 1);
 				}
 
 				if (!isAgentTerminal(terminal)) {
