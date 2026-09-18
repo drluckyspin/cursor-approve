@@ -111,6 +111,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   hold the panel until it does.
 - Invoking **Copy Dashboard Image** while a copy is running reported that the clipboard had been written, when that
   invocation did nothing.
+- Changing `intervalMs` while automatic approval was active dropped the time since the previous poll from both the
+  window and the day, because the checkpoint was restarted without banking it first.
+- A window with nothing banked no longer advances the shared checkpoint. One that had just opened, or that was flushing
+  for **Show Diagnostics** before its first poll, could move the clock past an interval another window had polled
+  through, and that window lost it.
+- Toggling automatic approval redraws the dashboard once the final merge lands, rather than leaving the previous totals
+  on screen until some later event rebuilt it.
 
 ## [0.3.2] - 2026-09-09
 

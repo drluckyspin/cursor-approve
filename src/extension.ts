@@ -512,12 +512,21 @@ async function mergeSharedDaily(now: number, foldActive: boolean): Promise<void>
 			// advances the checkpoint the next one measures from.
 			const credit = Math.min(Math.max(0, now - record.lastCheckpointAt), banked);
 
+			// The checkpoint moves only when something was credited. A window
+			// with nothing banked — one that just opened, or that is flushing
+			// for Diagnostics before its first poll — would otherwise advance
+			// the clock past an interval a concurrently active window had
+			// polled through, and that window would lose it.
 			if (credit > 0) {
 				record.activeMs += credit;
+				record.lastCheckpointAt = now;
 			}
+		} else {
+			// Not a fold but a deliberate reset of the shared clock, on
+			// shutdown or when adopting a stored day.
+			record.lastCheckpointAt = now;
 		}
 
-		record.lastCheckpointAt = now;
 		record.unsuccessfulAttempts += merging.unsuccessfulAttempts;
 		record.commandsRun += merging.commandsRun;
 		record.commandsApproved += merging.commandsApproved;
@@ -681,20 +690,25 @@ function scheduleDailyRollover(): void {
 
 /** Open or close the active stretch when the setting changes. */
 function updateActiveStretchForSetting(enabled: boolean): void {
+	// Each flush is awaited only for its redraw: the merge is asynchronous, so
+	// without this the dashboard would keep showing pre-toggle totals until
+	// some later event rebuilt it.
 	if (enabled) {
 		startActiveStretch(Date.now());
 		lastPollAt = undefined;
-		void flushSharedDaily(true);
+		lastTickPolled = false;
+		void flushSharedDaily(true).finally(() => updateStatusBar());
 		return;
 	}
 
 	activeSince = undefined;
 	lastPollAt = undefined;
+	lastTickPolled = false;
 
 	// Folded even though approval is now off: the interval being closed here is
 	// time it was still on, and dropping it would lose up to a flush interval
 	// on every toggle.
-	void flushSharedDaily(true, true);
+	void flushSharedDaily(true, true).finally(() => updateStatusBar());
 }
 
 /** Note that the poll loop ran, so the stretch and the day stay current. */
@@ -823,12 +837,18 @@ function startPolling(): void {
 
 	const interval = config().get<number>("intervalMs", 1000);
 
-	// Restart the checkpoint window at the change rather than clearing it. The
-	// gap being replaced is still not judged against the new tolerance, but
-	// suspend detection stays armed: leaving this undefined meant a machine that
-	// slept before the next poll had nothing to measure the gap from, and the
-	// sleep counted as active until that poll arrived.
-	lastPollAt = Date.now();
+	// Bank what the old interval polled through before adopting the new one.
+	// This still runs under the old tolerance, so the gap being replaced is not
+	// judged against the new one, and the checkpoint is restarted rather than
+	// cleared: leaving it undefined meant a machine that slept before the next
+	// poll had nothing to measure the gap from, and the sleep counted as active.
+	if (activeSince !== undefined) {
+		updateActiveStretch(Date.now());
+	} else {
+		lastPollAt = Date.now();
+		lastTickPolled = false;
+	}
+
 	pollIntervalMs = interval;
 
 	timer = setInterval(() => void tick(), interval);
