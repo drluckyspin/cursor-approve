@@ -246,8 +246,11 @@ let unfoldedActiveMs = 0;
 /** Whether the previous tick polled, rather than being skipped for focus. */
 let lastTickPolled = false;
 
-/** Guards against a slow approval overlapping the next poll. */
-let tickInFlight = false;
+/**
+ * The poll currently running, so a slow approval cannot overlap the next tick
+ * and shutdown can wait for it rather than losing what it recorded.
+ */
+let tickInFlight: Promise<void> | undefined;
 
 /** The re-read currently running, for windows that are not polling. */
 let sharedReloadInFlight: Promise<void> | undefined;
@@ -831,16 +834,16 @@ async function tick(): Promise<void> {
 	// attributes that command to the wrong invocation or loses it. Skipping is
 	// safe: nothing is missed, since the approval already in flight is the one
 	// this tick would have made, and the interval it covers is still banked.
-	if (tickInFlight) {
+	if (tickInFlight !== undefined) {
 		return;
 	}
 
-	tickInFlight = true;
+	tickInFlight = runTick();
 
 	try {
-		await runTick();
+		await tickInFlight;
 	} finally {
-		tickInFlight = false;
+		tickInFlight = undefined;
 	}
 }
 
@@ -888,7 +891,14 @@ function startPolling(): void {
 	// cleared: leaving it undefined meant a machine that slept before the next
 	// poll had nothing to measure the gap from, and the sleep counted as active.
 	if (activeSince !== undefined) {
+		// Restored afterwards because `updateActiveStretch` marks the cursor as
+		// polled, which is true of a tick but not of a settings change. With
+		// `onlyWhenFocused` and this window in the background, claiming
+		// otherwise let the first focused tick bank the interval since the
+		// restart as though it had been polled through.
+		const polled = lastTickPolled;
 		updateActiveStretch(Date.now());
+		lastTickPolled = polled;
 	} else {
 		lastPollAt = Date.now();
 		lastTickPolled = false;
@@ -1894,6 +1904,12 @@ export async function deactivate(): Promise<void> {
 		clearTimeout(rolloverTimer);
 		rolloverTimer = undefined;
 	}
+
+	// Let a poll already inside `approveOnce` finish first. Clearing the timer
+	// does not stop the one running, and anything it went on to record — an
+	// agent execution, a failed attempt — would land in `pendingDaily` after
+	// the final merge and be lost with the host.
+	await tickInFlight?.catch(() => undefined);
 
 	// Bank the part-interval since the last poll, then merge before the stretch
 	// is cleared, so this window's last interval and any unmerged counts reach

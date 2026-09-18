@@ -128,6 +128,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   wrong invocation or dropped it from the approved figure.
 - Cutting the stretch at local midnight now discards the poll cursor with it, so the first poll of the new day cannot
   bank the interval that straddled the boundary into it.
+- Shutdown waits for a poll already awaiting Cursor's approval command. Clearing the timer does not stop the one
+  running, so anything it recorded afterwards landed after the final merge and went with the host.
+- Restarting the poll loop after a settings change no longer marks the checkpoint as polled. With `onlyWhenFocused`
+  enabled and the window in the background, the first focused poll banked the interval since the change as active.
 
 ## [0.3.2] - 2026-09-09
 
