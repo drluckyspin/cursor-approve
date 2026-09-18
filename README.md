@@ -9,7 +9,11 @@ so long-running agent sessions do not stall waiting for you to click **Run**.
 
 Requires **Cursor** (not stock VS Code). Automatic approval is **off** by default.
 
-![Movie of Cursor Approve in action](docs/overview.gif)
+<!-- markdownlint-disable MD033 -->
+
+<img src="docs/overview.gif" alt="Cursor's agent holding a tool call while Cursor Approve is active" />
+
+<!-- markdownlint-enable MD033 -->
 
 ## What is agent tool approval?
 
@@ -18,49 +22,37 @@ and **Skip**. Until you choose one, the session waits. That is deliberate — it
 you did not intend.
 
 For unattended work — long refactors, CI fixes, overnight runs — clicking **Run** on every tool call becomes friction.
-Cursor's own mode menu offers built-in alternatives (**Auto-review**, **Run Everything**), but certain workflows still
-want a per-session toggle that can be flipped on and off without changing global agent settings.
+Cursor includes built-in alternatives such as **Auto-review** and **Run Everything**, but you may instead want a toggle
+you can flip on and off for a stretch of work, without changing your agent mode.
 
 ## What is this extension?
 
-This is a small VS Code extension that runs inside Cursor's extension host. It polls Cursor's workbench looking for the
-an agent tool call that is pending approval. It then sends "Enter" using Cursor's workbench command to effectively
-approve the "Run" button.
-
-Once installed, you will see a status bar toggle menu item, that shows whether automatic approval is active or not.
+**Cursor Approve** is a small extension that runs inside Cursor's extension host. It checks for pending shell-tool
+approvals and invokes Cursor's own approval command, the equivalent of choosing **Run**. Your main interaction will be
+through a status bar item that gets added to the far right.
 
 <!-- markdownlint-disable MD033 -->
 
-<img src="docs/auto-approve-off.png" width="700" alt="Status bar: Cursor Approve off" />
-
-<img src="docs/auto-approve-on.png" width="700" alt="Status bar: Cursor Approve on" />
+<img src="docs/auto-approve.gif" width="650" alt="Toggling automatic approval off and on from the status bar" />
 
 <!-- markdownlint-enable MD033 -->
 
-Hover it for a compact dashboard: the mode it is approving in and how often it polls, when it was switched on, and how
-long it has been active this session and today, each beside the share of the agent's commands it approved.
-
-The bottom row is live. **Toggle On/Off** flips approval from the hover itself, **Diagnostics** opens the full report in
-the Output panel, and **Settings** jumps to this extension's settings. Clicking the status bar item, the Command
-Palette, and `cursorApprove.enabled` toggle it from elsewhere.
-
-![The status bar hover dashboard, its approval count rising from 2 of 3 to 3 of 4 as the agent runs commands](docs/dashboard.gif)
+Click to toggle on/off the auto approval mode, or hover over the item for a small stats dashboard. See
+[Dashboard and stats](#dashboard-and-stats) for details of the stats shown.
 
 ## Quick start
 
-Install the latest `.vsix` from [Releases](https://github.com/drluckyspin/cursor-approve/releases), then:
+### Install
+
+Download the latest `.vsix` from [Releases](https://github.com/drluckyspin/cursor-approve/releases), then run e.g.:
 
 ```bash
 cursor --install-extension cursor-approve-0.4.0.vsix
 ```
 
-Reload the window (`Cmd+Shift+P` → **Developer: Reload Window**), then click **Auto Approve** in the status bar or run
-**Cursor Approve: Toggle Automatic Approval** from the Command Palette.
+Reload your Cursor window (`Cmd+Shift+P` → **Developer: Reload Window**).
 
-To verify the extension can hook into Cursor's commands, run **Cursor Approve: List Cursor Composer Commands** and
-confirm `composer.approvePendingShellToolDecision` appears in the output.
-
-### From source
+To build and install from source instead:
 
 ```bash
 git clone https://github.com/drluckyspin/cursor-approve.git
@@ -69,53 +61,44 @@ make check
 make install
 ```
 
-## Usage
+### Getting started
 
-Automatic approval is off by default. Enable it when you want unattended agent sessions; disable it when you want to
-review each tool call manually.
+Automatic approval starts off. Turn it on by clicking **Auto Approve** in the status bar, running **Cursor Approve:
+Toggle Automatic Approval** from the Command Palette, or setting `cursorApprove.enabled` to `true`. Turn it off the same
+way when you want to review tool calls yourself.
 
-| Command                                          | What it does                                       |
+Toggling writes the `cursorApprove.enabled` user setting, so it applies to every open Cursor window rather than only the
+one you clicked in. Set `onlyWhenFocused` to `true` if you want approval to happen only in the window you are actively
+working in.
+
+| Command                                          | Description                                        |
 | ------------------------------------------------ | -------------------------------------------------- |
-| `Cursor Approve: Toggle Automatic Approval`      | Turn polling on or off                             |
-| `Cursor Approve: Approve Pending Tool Call Once` | Approve once without enabling the timer            |
-| `Cursor Approve: Show Diagnostics`               | Print state to the **Cursor Approve** output panel |
-| `Cursor Approve: List Cursor Composer Commands`  | Dump every registered `composer.*` command         |
+| `Cursor Approve: Toggle Automatic Approval`      | Turn automatic approval on or off                  |
+| `Cursor Approve: Approve Pending Tool Call Once` | Approve the current pending shell-tool call once   |
+| `Cursor Approve: Show Diagnostics`               | Open the Cursor Approve report in the Output panel |
+| `Cursor Approve: Copy Dashboard Image`           | Copy the hover dashboard as a PNG to the clipboard |
+| `Cursor Approve: List Cursor Composer Commands`  | List Cursor's registered `composer.*` commands     |
 
-### Approval modes
-
-`cursorApprove.mode` chooses which Cursor command the timer invokes. Both map to buttons on the shell-tool approval
-card; neither affects other tool types (MCP, browser, etc.).
-
-| Mode        | Command invoked                                     | Equivalent to  |
-| ----------- | --------------------------------------------------- | -------------- |
-| `run`       | `composer.approvePendingShellToolDecision`          | **Run**        |
-| `allowlist` | `composer.approvePendingShellToolDecisionAllowlist` | **Always Run** |
-
-**Default is `run`.** That approves the current shell command and nothing more.
-
-`allowlist` is opt-in and behaves like clicking **Always Run** on every pending shell approval while the extension is
-active. Cursor may remember those commands and stop prompting for them later — even after you turn the extension off.
-That persistence is Cursor's own allowlist, not something this extension can undo. Only use it when you are comfortable
-with commands being remembered project-wide.
-
-> **Warning:** Polling in `allowlist` mode can add many entries to Cursor's shell allowlist in a single unattended
-> session. A misbehaving or prompt-injected agent could get `rm`, `curl`, or other commands remembered alongside the
-> ones you intended. Prefer `run` unless you explicitly want **Always Run** behavior.
+After upgrading Cursor, run **Cursor Approve: List Cursor Composer Commands** and confirm
+`composer.approvePendingShellToolDecision` appears in the Output panel.
 
 ## Configuration
 
-| Setting                           | Type      | Default               | Description                                        |
-| --------------------------------- | --------- | --------------------- | -------------------------------------------------- |
-| `cursorApprove.enabled`           | `boolean` | `false`               | Poll and approve automatically                     |
-| `cursorApprove.intervalMs`        | `number`  | `1000`                | Poll interval in milliseconds (250–30000)          |
-| `cursorApprove.mode`              | `string`  | `run`                 | `run` or `allowlist`                               |
-| `cursorApprove.onlyWhenFocused`   | `boolean` | `false`               | Only approve while this window has focus           |
-| `cursorApprove.showStatusBarItem` | `boolean` | `true`                | Show the status bar toggle                         |
-| `cursorApprove.statusBarPriority` | `number`  | `-100`                | Position; lower values sit further right           |
-| `cursorApprove.statusBarStyle`    | `string`  | `foreground`          | `foreground`, `background`, or `none`              |
-| `cursorApprove.activeColor`       | `string`  | `textLink.foreground` | Accent color when `statusBarStyle` is `foreground` |
+You can get quick access to the configuration for Cursor Approve by hovering over the status bar item and clicking
+"Settings".
 
-Example `settings.json`:
+| Setting                           | Type      | Default               | Description                                              |
+| --------------------------------- | --------- | --------------------- | -------------------------------------------------------- |
+| `cursorApprove.enabled`           | `boolean` | `false`               | Turn automatic approval on or off                        |
+| `cursorApprove.intervalMs`        | `number`  | `1000`                | Check interval in milliseconds (`250`–`30000`)           |
+| `cursorApprove.mode`              | `string`  | `run`                 | Approve with `run` or `allowlist`                        |
+| `cursorApprove.onlyWhenFocused`   | `boolean` | `false`               | Approve only while this Cursor window is focused         |
+| `cursorApprove.showStatusBarItem` | `boolean` | `true`                | Show the status bar item                                 |
+| `cursorApprove.statusBarPriority` | `number`  | `-100`                | Position; lower values place it further right            |
+| `cursorApprove.statusBarStyle`    | `string`  | `foreground`          | Active appearance: `foreground`, `background`, or `none` |
+| `cursorApprove.activeColor`       | `string`  | `textLink.foreground` | Foreground color while active                            |
+
+Add any of these entries to your Cursor `settings.json` (`Cmd+Shift+P` → **Preferences: Open User Settings (JSON)**):
 
 ```json
 {
@@ -126,57 +109,25 @@ Example `settings.json`:
 }
 ```
 
-## How it works
+### Approval modes
 
-```text
-Timer (every N ms)
-  → extension host calls composer.approvePendingShellToolDecision
-    → Cursor's handler checks for a pending tool call
-      → if none: return immediately (no-op)
-      → if pending: approve (same as pressing Run)
-```
+| Mode        | Cursor action  | Use it when                                   |
+| ----------- | -------------- | --------------------------------------------- |
+| `run`       | **Run**        | You want to approve each pending command only |
+| `allowlist` | **Always Run** | You want Cursor to remember approved commands |
 
-Cursor registers three related commands:
+`run` is the default. In `allowlist` mode, Cursor can remember commands and stop prompting for them later, even after
+you turn the extension off. Use it only when you want that project-wide behavior.
 
-| Command                                             | UI equivalent  |
-| --------------------------------------------------- | -------------- |
-| `composer.approvePendingShellToolDecision`          | **Run**        |
-| `composer.approvePendingShellToolDecisionAllowlist` | **Always Run** |
-| `composer.skipPendingShellToolDecision`             | **Skip**       |
+### Status bar appearance
 
-Extensions cannot read the `composerShellToolPendingKeybindingsActive` context key that gates Cursor's own `Enter`
-binding, so this extension **polls** on a timer instead. Polling is safe because the handler early-returns when nothing
-is pending:
+| Style        | Appearance                                 |
+| ------------ | ------------------------------------------ |
+| `foreground` | Tints the icon and text with `activeColor` |
+| `background` | Uses the theme's warning background        |
+| `none`       | Shows no active-state color                |
 
-```js
-const g = p.getPendingUserDecisionGroup()();
-const f = jAh(g);
-if (!f) return; // nothing pending, no-op
-```
-
-### Status bar position
-
-The item sits in the right-hand status bar group, ordered by `cursorApprove.statusBarPriority`. VS Code draws higher
-priorities further **left**, so the default of `-100` keeps it to the right of most extensions; lower it further to push
-it toward the edge. VS Code fixes an item's priority when it is created, so the extension recreates the item whenever
-you change this setting.
-
-### Status bar highlight
-
-The status bar item is highlighted while automatic approval is active so an unattended session never approves silently.
-
-| Style        | Appearance                                                        |
-| ------------ | ----------------------------------------------------------------- |
-| `foreground` | Tints text and icon with `activeColor` (follows the theme accent) |
-| `background` | Fills the item using the theme's status bar warning color         |
-| `none`       | No highlight beyond the icon change                               |
-
-`foreground` is the default because it is the only style that tracks the theme's accent color across themes. VS Code
-allowlists exactly two status bar backgrounds (`statusBarItem.errorBackground` and `statusBarItem.warningBackground`),
-and color customizations require literal hex values, so an extension cannot paint an arbitrary accent as a background on
-its own.
-
-If you prefer a filled item, set `statusBarStyle` to `background` and override the warning color for your theme:
+To customize the background style for a theme:
 
 ```json
 "workbench.colorCustomizations": {
@@ -187,146 +138,140 @@ If you prefer a filled item, set `statusBarStyle` to `background` and override t
 }
 ```
 
-### Status dashboard
+## Dashboard and stats
 
-Hover **Auto Approve** for a compact, theme-native dashboard. Its counts rise as the agent works:
+Hover over the **Auto Approve** status item to pop up a small stats dashboard.
 
-![The status bar hover dashboard, its approval count rising from 2 of 3 to 3 of 4 as the agent runs commands](docs/dashboard.gif)
+<!-- markdownlint-disable MD033 -->
 
-| Row                | Measures                                                                |
-| ------------------ | ----------------------------------------------------------------------- |
-| **Active since**   | The clock time the current stretch of automatic approval began          |
-| **Current Window** | Time and commands in this window since that moment                      |
-| **Total Today**    | Time and commands since local midnight, across every open Cursor window |
+| Dashboard                                                                                                                             | Measures                                                                                                                                                                                                                                                                                                                                                                                                 |
+| ------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| <img src="docs/dashboard.png" width="780" alt="The status bar hover dashboard with active time, approval counts, and footer links" /> | **Active since** — When the current stretch of automatic approval began<br><br>**Current Window** — Time and commands in this window during that stretch<br><br>**Total Today** — Time and commands since local midnight across open Cursor windows<br><br>**Note** - Durations count time Cursor Approve was running and active, not wall-clock time. Time while the machine is asleep is not included. |
 
-Both durations count time the extension was **running and armed**, not time on the clock, so they will not match the
-time of day. Whatever the machine spent asleep is left out, because nothing can execute while it is: on a morning where
-8h 29m had passed since midnight and the Mac had slept for 1h 04m of it, **Total Today** read 7h 25m.
+<!-- markdownlint-enable MD033 -->
 
-A stretch is what **Active since** names and **Current Window** measures. It starts when you switch approval on, starts
-again when the machine wakes from a sleep long enough to prove nothing was running, and is cut at local midnight so it
-never describes part of yesterday. Its counts restart with it, which is why **Current Window** can read `0/0` while
-**Total Today** still shows the morning's work.
+**Current Window** measures exactly the stretch that **Active since** names, so the two never disagree. That stretch
+begins when you turn automatic approval on, and begins again when the machine wakes from a long sleep or when the clock
+passes local midnight — its counts restart with it. **Total Today** keeps accumulating from midnight and is shared
+across your open Cursor windows.
 
-Every window runs its own copy of the extension, so the day's totals live in a file in the extension's global storage
-that each window re-reads and merges into rather than overwrites. Counts add up across windows, while active time is
-folded once by whichever window checkpoints next: approval is a global setting, so two windows armed for an hour is one
-hour of exposure, not two.
+`2 / 3 Auto Approved` means Cursor Approve approved two of the three agent commands that ran during that period.
+Commands Cursor auto-ran itself, through its own allowlist or sandbox, count toward the total but not the approved
+figure.
 
-`5/12 Auto Approved` reads as five of the twelve agent commands that ran were released by this extension. The total is
-what Cursor's agent terminals report, identified the same way Cursor identifies them internally, by an `Agent Terminal`
-or `Cursor (` name prefix. The gap between the two numbers is the interesting part: it is the work Cursor auto-ran on
-its own, because anything covered by its allowlist or sandbox never needs an approval at all.
+A warning line appears only while it applies: an unavailable approval command, unsuccessful approval attempts,
+`onlyWhenFocused` restricting approval to the focused window, or `allowlist` mode.
 
-The approved figure is attributed by timing. Cursor's approval command reports nothing, so there is no direct signal,
-but the two cases separate cleanly in practice: a command waiting on approval starts within about 50ms of the invocation
-that released it, while one Cursor auto-ran starts at an arbitrary point in the poll cycle. Commands that start
-immediately after an invocation are therefore counted as approved.
+The footer has links to **Toggle On/Off**, **Diagnostics**, and **Settings**, followed by a **camera** icon that copies
+the dashboard to the clipboard as a theme-accurate PNG — useful for bug reports or pasting into chat. **Cursor Approve:
+Copy Dashboard Image** does the same from the Command Palette. A short-lived **Copy Dashboard** editor tab opens while
+the image is rendered, then closes automatically.
 
-Anything that is only interesting when it is true gets a line only while it applies: an unavailable Cursor approval
-command, unsuccessful attempts today, approval restricted to the focused window, or `allowlist` mode adding approved
-commands to the allowlist. The first, second, and fourth carry a colored pill drawn from the status bar's own error and
-warning colors, so they stay legible in any theme. **Show Diagnostics** remains the full, copyable breakdown.
+<!-- markdownlint-disable MD033 -->
 
-Durations are shown in whole elapsed minutes, and the dashboard is replaced only when its rendered text changes. It is
-therefore current whenever you hover it without redrawing an open hover every second. It uses the active theme's tooltip
-colors, because VS Code does not give extensions an API for a custom tooltip background. Its links are restricted to
-this extension's toggle and diagnostics commands plus the built-in Settings command.
+<img src="docs/dashboard-copy.png" width="380" alt="Dashboard PNG copied to the clipboard" />
 
-An open hover keeps whatever it was rendered with, and no API can re-render or dismiss it, so **Toggle On/Off** is
-worded for either state rather than claiming to turn approval off while it is already off. The values above it are
-likewise from the moment the hover opened; move away and hover again for the current ones.
-
-## Built-in alternative
-
-Cursor ships its own tool approval modes in the agent panel's mode menu:
-
-| Mode           | Behavior                                                                |
-| -------------- | ----------------------------------------------------------------------- |
-| Ask Every Time | Prompt for every tool call (default)                                    |
-| Allowlist      | Auto-run allowlisted commands only                                      |
-| Auto-review    | Auto-run operations Cursor classifies as safe, sandboxed where possible |
-| Run Everything | Auto-approve all operations without asking                              |
-
-If **Auto-review** or **Run Everything** fits your workflow, prefer those — they do not depend on undocumented commands
-and do not require an extension. Note that switching away from **Ask Every Time** removes that option from the menu
-permanently.
-
-This extension is for users who want a **per-session toggle** without changing global agent mode, or who want **Run**
-behavior (approve once) rather than **Always Run**.
+<!-- markdownlint-enable MD033 -->
 
 ## Safety
 
-This bypasses a deliberate confirmation step. An agent that has been prompt-injected, or that simply misunderstands a
-task, can run shell commands without asking while automatic approval is enabled.
+Automatic approval bypasses a deliberate confirmation step. An agent that is prompt-injected or misunderstands a task
+can run shell commands without asking while it is active.
 
-- Keep the status bar toggle visible so you always know when it is active.
-- Hover the status bar toggle for its configuration plus how long approval has been active this session and today.
-- Use `onlyWhenFocused` if you only want unattended approval in the active window.
-- Prefer `run` over `allowlist` — see [Approval modes](#approval-modes) for how **Always Run** persistence works.
-- The extension disables itself after three consecutive unsuccessful approval attempts rather than looping silently.
+- Keep the status bar item visible so you know when automatic approval is active.
+- Use `onlyWhenFocused` to restrict approval to the active Cursor window.
+- Prefer `run` unless you explicitly want **Always Run** behavior.
+- Run **List Cursor Composer Commands** after a Cursor upgrade to confirm the approval command is still available.
+- After three consecutive failed approval attempts the extension turns itself off and tells you, rather than looping
+  silently.
 
-Cursor's internal commands are undocumented and may be renamed between releases. Run **List Cursor Composer Commands**
-after upgrading Cursor to confirm the approval commands still exist.
+## Built-in alternatives
 
-## Project layout
+Cursor offers its own approval modes in the agent panel:
+
+| Mode           | Behavior                                      |
+| -------------- | --------------------------------------------- |
+| Ask Every Time | Prompt for every tool call                    |
+| Allowlist      | Auto-run allowlisted commands                 |
+| Auto-review    | Auto-run operations Cursor classifies as safe |
+| Run Everything | Auto-approve all operations                   |
+
+Choose one of these modes if it better matches your workflow. Cursor Approve is for a status bar toggle you can flip on
+and off as you go, preserving **Run** behavior.
+
+## Roadmap
+
+Planned, not yet implemented:
+
+- **A per-window toggle.** Toggling writes the `cursorApprove.enabled` user setting, so it currently turns automatic
+  approval on or off in every open Cursor window. The goal is for the status bar item to control only its own window. VS
+  Code offers no per-window configuration target, so this means holding the active state in the extension host and
+  treating `cursorApprove.enabled` as the startup default. Until then, `onlyWhenFocused` confines approval to the window
+  you are working in.
+- **An automatic update check.** Installing from a VSIX means Cursor never tells you when a newer version exists. The
+  goal is to check the published releases in the background and show a notification linking to the new VSIX when one is
+  available.
+
+## Developing
+
+Run these commands from the repository root:
+
+```bash
+make check
+make build
+make lint
+make fmt
+make package    # builds cursor-approve-0.4.0.vsix
+make install    # packages and installs the VSIX into Cursor
+```
+
+Press `F5` in Cursor to open an Extension Development Host. Test there, then run **Developer: Reload Window** in that
+window after source changes.
+
+Run `make bump-version X.Y.Z` to update `VERSION`, `package.json`, `package-lock.json`, and the VSIX install example.
+
+### Project layout
 
 ```text
 cursor-approve/
 ├── src/
-│   └── extension.ts          # Polling, commands, status bar, diagnostics
+│   └── extension.ts              # Polling, commands, status bar, dashboard, diagnostics
+├── media/
+│   └── copy-dashboard.html       # Canvas renderer behind Copy Dashboard Image
 ├── scripts/
-│   ├── bump-version.sh       # Sync VERSION into package.json and README
-│   └── log.bash              # Shared colored script logging
+│   ├── bump-version.sh           # Sync VERSION into package.json and README
+│   ├── update-release-docs.sh    # Finalize CHANGELOG on publish
+│   └── log.bash                  # Shared colored script logging
+├── docs/                         # README screenshots and GIFs
 ├── .github/workflows/
-│   └── ci.yml                # Type check, compile, package, upload .vsix
+│   ├── ci.yml                    # Type check, compile, package, upload .vsix
+│   └── release.yml               # Publish the VSIX and commit the CHANGELOG
 ├── .vscode/
-│   ├── launch.json           # F5 → Extension Development Host
-│   └── tasks.json            # npm compile / watch
-├── AGENTS.md                 # Guidance for coding agents
-├── dprint.json               # Markdown and TypeScript formatting
-├── Makefile                  # Development and release commands
-├── package.json              # Extension manifest and settings schema
+│   ├── launch.json               # F5 → Extension Development Host
+│   └── tasks.json                # npm compile / watch
+├── AGENTS.md                     # Guidance for coding agents
+├── dprint.json                   # Markdown and TypeScript formatting
+├── Makefile                      # Development and release commands
+├── package.json                  # Extension manifest and settings schema
 ├── tsconfig.json
-├── VERSION                   # Semantic-version source of truth
+├── VERSION                       # Semantic-version source of truth
 ├── CHANGELOG.md
 └── LICENSE
 ```
 
-## Development
+## Releases
 
-Run the following from the repository root:
+See [Releases](https://github.com/drluckyspin/cursor-approve/releases) for published VSIX files and
+[CHANGELOG.md](CHANGELOG.md) for the complete change history.
 
-```bash
-make check
-make build      # install npm dependencies, then compile
-make lint
-make fmt
-make package    # build cursor-approve-0.4.0.vsix
-make install    # package and install the VSIX into Cursor
-```
+## Contributing
 
-Open the folder in Cursor and press `F5` to launch an Extension Development Host with the extension loaded. Test
-commands in that second window, then use **Developer: Reload Window** there after source changes.
+Issues and pull requests are welcome!
 
-Run `make bump-version X.Y.Z` to update `VERSION`, synchronize the extension manifest and `.vsix` install example.
-
-## Release history
-
-| Extension | Notes                                                                            |
-| --------- | -------------------------------------------------------------------------------- |
-| 0.3.2     | Diagnostics now reliably select the Cursor Approve Output channel, and the statu |
-| 0.3.1     | Extension icon (`logo512.png`) in the marketplace manifest and README header.    |
-| 0.3.0     | Hardening, development tooling, diagnostics, and refreshed docs                  |
-| 0.2.0     | Theme-accent status bar, `statusBarStyle` setting                                |
-| 0.1.0     | Initial release — polling, toggle, diagnostics                                   |
-
-See [CHANGELOG.md](CHANGELOG.md) for the full version history. Published GitHub releases (not every table row has a
-separate release): [v0.3.2](https://github.com/drluckyspin/cursor-approve/releases/tag/v0.3.2),
-[v0.3.1](https://github.com/drluckyspin/cursor-approve/releases/tag/v0.3.1),
-[v0.1.0](https://github.com/drluckyspin/cursor-approve/releases/tag/v0.1.0) and
-[v0.3.0](https://github.com/drluckyspin/cursor-approve/releases/tag/v0.3.0).
-
-## License
-
-MIT — see [LICENSE](LICENSE).
+<!-- markdownlint-disable MD033 -->
+<p align="center">
+  <img
+    src="https://img.shields.io/badge/License-MIT-b7bdf8?style=for-the-badge&labelColor=363a4f"
+    alt="MIT License"
+  />
+</p>
