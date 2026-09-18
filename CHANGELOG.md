@@ -120,6 +120,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   on screen until some later event rebuilt it.
 - Turning automatic approval off, and shutting the extension host down, each dropped the part-interval since the last
   poll. Both now bank it before the stretch is cleared, which is what their comments already claimed.
+- **Copy Dashboard Image** timed out whenever the webview took longer than 400ms to load. The page announces itself
+  once, and the listener waiting for it was torn down at 400ms before a second one was installed, so the announcement
+  was lost. One listener now covers the whole wait and the panel is revealed on a timer instead.
+- A poll no longer starts while the previous one is still waiting on Cursor's approval command. An approval slower than
+  the interval had its invocation timestamp overwritten by the next poll, which attributed the released command to the
+  wrong invocation or dropped it from the approved figure.
+- Cutting the stretch at local midnight now discards the poll cursor with it, so the first poll of the new day cannot
+  bank the interval that straddled the boundary into it.
 
 ## [0.3.2] - 2026-09-09
 

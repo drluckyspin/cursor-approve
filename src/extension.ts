@@ -246,6 +246,9 @@ let unfoldedActiveMs = 0;
 /** Whether the previous tick polled, rather than being skipped for focus. */
 let lastTickPolled = false;
 
+/** Guards against a slow approval overlapping the next poll. */
+let tickInFlight = false;
+
 /** The re-read currently running, for windows that are not polling. */
 let sharedReloadInFlight: Promise<void> | undefined;
 
@@ -337,6 +340,12 @@ function startOfLocalDay(now = Date.now()): number {
 function startActiveStretch(now: number): void {
 	activeSince = now;
 	windowMetrics = createWindowMetrics();
+
+	// The previous cursor belongs to the stretch being abandoned. Leaving it
+	// live let the first poll of a stretch cut at midnight bank the interval
+	// either side of the boundary into the new day. Callers that know the tick
+	// polled set this again straight after.
+	lastTickPolled = false;
 }
 
 /**
@@ -816,6 +825,27 @@ async function approveOnce(reason: string): Promise<boolean> {
  * this window does not have focus.
  */
 async function tick(): Promise<void> {
+	// `setInterval` does not wait for the previous callback. An approval command
+	// slower than the interval would otherwise have its invocation timestamp
+	// overwritten by the next tick before the released command started, which
+	// attributes that command to the wrong invocation or loses it. Skipping is
+	// safe: nothing is missed, since the approval already in flight is the one
+	// this tick would have made, and the interval it covers is still banked.
+	if (tickInFlight) {
+		return;
+	}
+
+	tickInFlight = true;
+
+	try {
+		await runTick();
+	} finally {
+		tickInFlight = false;
+	}
+}
+
+/** The body of one poll cycle, serialized by `tick`. */
+async function runTick(): Promise<void> {
 	if (config().get<boolean>("onlyWhenFocused", false) && !vscode.window.state.focused) {
 		// The loop is alive even though this tick approved nothing, so record
 		// that. Without it, working in another application for longer than the
@@ -1173,25 +1203,27 @@ async function createCopyDashboardPanel(context: vscode.ExtensionContext): Promi
 		}
 	});
 
-	const readyWithoutReveal = waitForCopyDashboardMessage(panel, "ready", 400);
+	// One listener for the whole wait. The page posts `ready` exactly once, so
+	// a short listener that timed out and was replaced would drop the message
+	// and never see another: every slow first load then timed out. Instead the
+	// reveal is what happens on a timer, since some hosts need one visible
+	// frame before webview scripts run.
+	const ready = waitForCopyDashboardMessage(panel, "ready", DASHBOARD_COPY_TIMEOUT_MS);
 	panel.webview.html = copyDashboardHtmlTemplate!
 		.replaceAll("{{cspSource}}", panel.webview.cspSource);
 
+	const revealIfSlow = setTimeout(() => panel.reveal(undefined, true), 400);
+
 	try {
-		await readyWithoutReveal;
-	} catch {
-		// Some hosts need one visible frame before webview scripts run.
-		try {
-			const readyAfterReveal = waitForCopyDashboardMessage(panel, "ready", DASHBOARD_COPY_TIMEOUT_MS);
-			panel.reveal(undefined, true);
-			await readyAfterReveal;
-		} catch (error) {
-			// The caller cannot clean this up: it holds the panel only once
-			// this resolves, so a tab left open here would never be closed and
-			// the next copy would overwrite the only reference to it.
-			panel.dispose();
-			throw error;
-		}
+		await ready;
+	} catch (error) {
+		// The caller cannot clean this up: it holds the panel only once this
+		// resolves, so a tab left open here would never be closed and the next
+		// copy would overwrite the only reference to it.
+		panel.dispose();
+		throw error;
+	} finally {
+		clearTimeout(revealIfSlow);
 	}
 
 	return panel;
