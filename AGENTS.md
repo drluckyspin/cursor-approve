@@ -124,26 +124,31 @@ When changing dashboard metrics, preserve these safeguards:
 
 ## Version and Release
 
-| File           | Role                                                                            |
-| -------------- | ------------------------------------------------------------------------------- |
-| `VERSION`      | Source of truth for the extension version                                       |
-| `package.json` | Synced by `make bump-version` (including `package-lock.json`)                   |
-| `README.md`    | VSIX install examples synced by `make bump-version`                             |
-| `CHANGELOG.md` | `[Unreleased]` during development; finalized by the release workflow on publish |
+| File           | Role                                                                                      |
+| -------------- | ----------------------------------------------------------------------------------------- |
+| `VERSION`      | Source of truth for the extension version                                                 |
+| `package.json` | Synced by `make bump-version` (including `package-lock.json`)                             |
+| `README.md`    | VSIX install examples synced by `make bump-version`                                       |
+| `CHANGELOG.md` | `[Unreleased]` during development; finalized by `make update-release-docs` before tagging |
 
 Use `make bump-version X.Y.Z` to update `VERSION` and synchronize the other version files. The release workflow is:
 
 ```bash
 # Document changes under ## [Unreleased] in CHANGELOG.md while developing.
 make bump-version X.Y.Z
+make update-release-docs
 make lint
 make fmt-check
 make package
-# Tag vX.Y.Z, create the GitHub release, then publish it.
+# Merge to main, then tag vX.Y.Z, create the GitHub release, and publish it.
 ```
 
-Publishing a GitHub release runs `.github/workflows/release.yml`, which uploads the VSIX and commits the finalized
-`CHANGELOG.md` to `main`. Tag and push only when explicitly requested.
+Finalize the CHANGELOG **before** tagging. The tag is what `.github/workflows/release.yml` builds from, so a
+`[Unreleased]` heading at that point ships inside the VSIX and shows on the extension's Changelog tab.
+
+Publishing a GitHub release runs that workflow, which packages the VSIX and uploads it to the release. It does not write
+to the repository: the ruleset on `main` requires a pull request, and the GitHub Actions app cannot be granted a ruleset
+bypass on a user-owned repository. Tag and push only when explicitly requested.
 
 ## Agent Guidelines
 
