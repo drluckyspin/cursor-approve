@@ -599,6 +599,12 @@ async function loadSharedDaily(context: vscode.ExtensionContext): Promise<void> 
 	// between them is time no window was running.
 	if (stored !== undefined && stored.date === localDateKey()) {
 		sharedDaily = { ...stored, lastCheckpointAt: Date.now() };
+
+		// Persist that advance before anything folds. Merging re-reads the file
+		// rather than trusting this copy, so leaving the old timestamp on disk
+		// meant the first merge after a quick reload folded the whole shutdown
+		// gap as active time.
+		await flushSharedDaily(true, false);
 	}
 
 	// A window still running an older build rewrites these, so they are cleared
@@ -748,6 +754,11 @@ async function approveOnce(reason: string): Promise<boolean> {
  */
 async function tick(): Promise<void> {
 	if (config().get<boolean>("onlyWhenFocused", false) && !vscode.window.state.focused) {
+		// The loop is alive even though this tick approved nothing, so record
+		// that. Without it, working in another application for longer than the
+		// tolerance was indistinguishable from a suspend, and returning to the
+		// window threw away the stretch and its counts.
+		lastPollAt = Date.now();
 		return;
 	}
 
@@ -776,9 +787,12 @@ function startPolling(): void {
 
 	const interval = config().get<number>("intervalMs", 1000);
 
-	// Forget the previous poll before the tolerance changes with the interval,
-	// so a lowered interval cannot judge the gap it is replacing as a suspend.
-	lastPollAt = undefined;
+	// Restart the checkpoint window at the change rather than clearing it. The
+	// gap being replaced is still not judged against the new tolerance, but
+	// suspend detection stays armed: leaving this undefined meant a machine that
+	// slept before the next poll had nothing to measure the gap from, and the
+	// sleep counted as active until that poll arrived.
+	lastPollAt = Date.now();
 	pollIntervalMs = interval;
 
 	timer = setInterval(() => void tick(), interval);

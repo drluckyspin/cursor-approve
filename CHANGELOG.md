@@ -89,6 +89,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - The temporary path reaches `osascript` as an argument read from `argv` instead of being interpolated into the script.
   It derives from `TMPDIR`, so a quote or newline in that variable could have ended the string literal and run the rest
   as AppleScript.
+- With `onlyWhenFocused` enabled, working in another application for longer than the gap tolerance looked like a
+  suspend, so returning to the window discarded the stretch and its counts.
+- A settings change left nothing to measure the next gap from, so a machine that slept before the following poll counted
+  the sleep as active until that poll arrived.
+- Reloading the extension host within the fold tolerance counted the shutdown gap as active time. The corrected
+  checkpoint was only held in memory, and merging re-reads the file.
 
 ## [0.3.2] - 2026-09-09
 
