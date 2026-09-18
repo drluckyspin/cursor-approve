@@ -4,7 +4,9 @@ set -euo pipefail
 # -----------------------------------------------------------------------------------------------------------
 # Script Name: update-release-docs.sh
 #
-# Description: Finalize CHANGELOG after a GitHub release is published.
+# Description: Finalize CHANGELOG for a release, renaming [Unreleased] to the version and opening a fresh
+#              [Unreleased] section. Run before tagging, so the tag and the VSIX built from it carry the
+#              released version rather than [Unreleased].
 #
 # Usage:
 #   scripts/update-release-docs.sh VERSION YYYY-MM-DD
