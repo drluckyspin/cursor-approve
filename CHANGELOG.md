@@ -62,6 +62,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   across windows, and active time is folded once from a shared checkpoint rather than once per window.
 - Totals recorded by builds that counted suspended time or raced between windows are discarded rather than carried into
   the corrected accounting.
+- Changing any `cursorApprove.*` setting while automatic approval was active restarted the current stretch, so editing
+  the interval, mode, or a color reset **Active since** and discarded **Current Window** and its counts. A stretch now
+  opens or closes only when the enabled state itself changes.
+- A failed approval invocation left its timestamp in place, so an agent command that started within the attribution
+  window could be counted as approved by a call that approved nothing.
+- The day's totals went stale in a window with automatic approval switched off. Nothing polled there, so nothing re-read
+  the shared record while other windows kept adding to it. The dashboard now re-reads it, rate-limited, and redraws only
+  when the totals changed.
+- **Current Window** could include time the machine spent suspended for up to one poll interval after waking, until the
+  next poll discarded the gap, while the day's total beside it had already refused to count it.
 
 ## [0.3.2] - 2026-09-09
 

@@ -235,8 +235,17 @@ let lastSharedFlushAt = 0;
 /** The merge currently running, since each one is a read-modify-write. */
 let sharedFlushInFlight: Promise<void> | undefined;
 
+/** The re-read currently running, for windows that are not polling. */
+let sharedReloadInFlight: Promise<void> | undefined;
+
+/** When the shared record was last re-read, to rate-limit the reload. */
+let lastSharedReloadAt = 0;
+
 /** Start of the current uninterrupted active stretch, for "Active since". */
 let activeSince: number | undefined;
+
+/** Enabled state the last `applyConfiguration` acted on, to spot a transition. */
+let lastAppliedEnabled: boolean | undefined;
 
 /** `setTimeout` handle for the next local-midnight dashboard refresh. */
 let rolloverTimer: ReturnType<typeof setTimeout> | undefined;
@@ -338,9 +347,22 @@ function updateActiveStretch(now: number): void {
 	lastPollAt = now;
 }
 
-/** How long the current stretch has run, measured from what "Active since" shows. */
+/**
+ * How long the current stretch has run, measured from what "Active since" shows.
+ *
+ * A suspend is discarded when the next poll notices it, but the dashboard can
+ * be rendered before that poll arrives, so the same gap is excluded here too.
+ * Otherwise waking the machine would show a stretch containing the whole sleep
+ * for up to one poll interval, beside a day total that had already refused to
+ * count it.
+ */
 function activeStretchMs(now = Date.now()): number {
-	return activeSince === undefined ? 0 : Math.max(0, now - activeSince);
+	if (activeSince === undefined) {
+		return 0;
+	}
+
+	const end = lastPollAt !== undefined && isSuspendGap(now - lastPollAt) ? lastPollAt : now;
+	return Math.max(0, end - activeSince);
 }
 
 function createSharedDailyRecord(now = Date.now()): SharedDailyRecord {
@@ -411,10 +433,15 @@ async function writeSharedDaily(record: SharedDailyRecord): Promise<void> {
 /**
  * Merge this window's pending counts into the shared record.
  *
- * Re-reads immediately before writing so concurrent windows accumulate rather
- * than overwrite. Active time is added by whichever window gets here first,
- * measured from the shared checkpoint, so it is counted once no matter how many
- * windows are open.
+ * Re-reading immediately before writing is what lets concurrent windows
+ * accumulate instead of overwriting each other wholesale, and the rename keeps
+ * any reader from seeing a half-written file. It is not a cross-process lock,
+ * though: two windows whose read-modify-write cycles overlap still resolve to
+ * whichever renamed last, costing the other's counts for that cycle. Each
+ * window merges at most once a minute and the cycle itself takes milliseconds,
+ * so the exposure is small and bounded to a few commands in a metric. Active
+ * time is unaffected either way, since it is folded from the shared checkpoint
+ * rather than summed per window.
  */
 async function flushSharedDaily(force = false, foldActive = isEnabled()): Promise<void> {
 	if (sharedFlushInFlight !== undefined) {
@@ -475,6 +502,46 @@ async function mergeSharedDaily(now: number, foldActive: boolean): Promise<void>
 		pendingDaily.commandsApproved += merging.commandsApproved;
 		output.warn(`Unable to update the shared daily metrics: ${String(error)}`);
 	}
+}
+
+/**
+ * Re-read the shared record when another window may have moved it on.
+ *
+ * Only for windows that are not polling: a merge already re-reads, so an active
+ * window is current by construction. Rate-limited to the flush interval and
+ * re-renders only when the totals actually changed, so a hover is not redrawn
+ * underneath the pointer.
+ */
+async function reloadSharedDailyIfStale(): Promise<void> {
+	if (sharedReloadInFlight !== undefined || Date.now() - lastSharedReloadAt < SHARED_FLUSH_INTERVAL_MS) {
+		return;
+	}
+
+	lastSharedReloadAt = Date.now();
+	sharedReloadInFlight = (async () => {
+		try {
+			const stored = await readSharedDaily();
+			if (stored === undefined || stored.date !== sharedDaily.date) {
+				return;
+			}
+
+			const changed = stored.activeMs !== sharedDaily.activeMs
+				|| stored.commandsRun !== sharedDaily.commandsRun
+				|| stored.commandsApproved !== sharedDaily.commandsApproved
+				|| stored.unsuccessfulAttempts !== sharedDaily.unsuccessfulAttempts;
+
+			if (changed) {
+				sharedDaily = stored;
+				updateStatusBar();
+			}
+		} catch (error) {
+			output.debug(`Unable to reload the shared daily metrics: ${String(error)}`);
+		} finally {
+			sharedReloadInFlight = undefined;
+		}
+	})();
+
+	await sharedReloadInFlight;
 }
 
 /** True while the shared record still describes the current local day. */
@@ -642,6 +709,9 @@ async function approveOnce(reason: string): Promise<boolean> {
 		output.debug(`Invoked ${command} (${reason})`);
 		return true;
 	} catch (error) {
+		// Nothing was released, so the timestamp must not survive to attribute
+		// an agent command that happens to start within the attribution window.
+		lastInvocationAt = undefined;
 		consecutiveErrorCount++;
 		lastError = error instanceof Error ? error.message : String(error);
 		output.error(`Failed to invoke ${command}: ${lastError}`);
@@ -1271,6 +1341,13 @@ function refreshTooltip(): void {
 		return;
 	}
 
+	// While approval is off this window never polls, so nothing would reload the
+	// shared record and the day's totals would sit at whatever they were when it
+	// was switched off, even as another window kept adding to them.
+	if (!isEnabled()) {
+		void reloadSharedDailyIfStale();
+	}
+
 	// A stale record renders as zeroes for the new day rather than yesterday's
 	// totals, so rendering never has to wait for a merge to be correct.
 	const tooltip = statusBarTooltip(isEnabled());
@@ -1305,7 +1382,15 @@ function updateStatusBar(): void {
  */
 function applyConfiguration(): void {
 	const enabled = isEnabled();
-	updateActiveStretchForSetting(enabled);
+
+	// Only a change of the enabled state opens or closes a stretch. This runs
+	// for every `cursorApprove.*` key, and starting a stretch discards the
+	// window's duration and counts, so editing the interval or a color would
+	// otherwise reset the row the user was watching.
+	if (enabled !== lastAppliedEnabled) {
+		lastAppliedEnabled = enabled;
+		updateActiveStretchForSetting(enabled);
+	}
 
 	if (enabled) {
 		startPolling();
