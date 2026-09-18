@@ -84,19 +84,52 @@ Set `VERBOSE=true` to retain unfiltered output from Makefile commands that use `
 Useful verification commands in the Extension Development Host:
 
 - **Cursor Approve: Show Diagnostics** opens the Output panel with the **Cursor Approve** channel selected. The
-  status-bar hover tooltip also provides a compact snapshot of its state, including unsuccessful approval attempts.
-  Ensure the Output panel log level includes **Info**.
+  status-bar hover shows a theme-native Markdown dashboard with the time automatic approval has been active this session
+  and today. Daily metrics persist through extension-host reloads; session metrics reset on activation. Ensure the
+  Output panel log level includes **Info**.
 - **Cursor Approve: List Cursor Composer Commands** lists all registered `composer.*` commands and confirms the
   extension's approval commands are available.
 
+When changing dashboard metrics, preserve these safeguards:
+
+- Never report approvals granted. Cursor's `run(e){ await zLo(e,"run") }` handler returns nothing whether it approved a
+  request or found nothing pending, no command exposes the pending-decision state, and extensions cannot read the
+  `composerShellToolPendingKeybindingsActive` context key. Report active time, which is measurable.
+- The day's totals live in `daily-metrics.json` under `globalStorageUri`, not in `globalState`. Every Cursor window runs
+  its own extension host with its own in-memory copy of `globalState`, never sees another window's writes, and
+  overwrites the shared value wholesale, which made the totals a race between windows. Keep the merge semantics: re-read
+  immediately before writing, add counts as per-window deltas, and fold active time once from the shared checkpoint so
+  concurrent windows cannot double-count a global setting.
+- Keep every dashboard value at minute granularity or coarser. The tooltip is rebuilt each tick and reassigned only when
+  its rendered text changes, so a per-second value would redraw a hovered tooltip every second.
+- Restrict trusted Markdown command links to the explicit dashboard command allowlist. Keep the tooltip background
+  theme-controlled; extensions cannot customize it through VS Code's API.
+- Agent terminal executions do reach the extension host, so the dashboard reports them as commands run. Never relabel
+  that as approvals granted: the same command runs whether this extension approved it, Cursor auto-ran it from its own
+  allowlist, or the user clicked Run.
+- Approvals are attributed by latency, and the threshold is measured rather than chosen. Commands awaiting approval
+  started 44 to 75ms after the invocation that released them, which is why `APPROVAL_ATTRIBUTION_MS` is 100; commands
+  Cursor auto-ran from its allowlist or sandbox land uniformly across the poll interval. Quote the threshold, not the
+  observations, in anything user-facing. Keep it well inside the interval, and re-measure with the diagnostics latency
+  buckets before changing it.
+- Never read `TerminalShellExecution.commandLine`. It fires for every execution the host exposes, including commands the
+  user typed, and their arguments routinely carry tokens and other secrets. Terminal names are sufficient.
+- Active time must accrue as it passes, not from a single start timestamp, so that time the machine spent suspended is
+  discarded rather than reported as active. The gap tolerance follows the interval that opened the current checkpoint
+  window, so that changing `intervalMs` cannot retroactively reclassify that window as suspended time.
+- That applies to the window row too. Report `windowMetrics.activeMs`, banked by `updateActiveStretch` on the ticks that
+  actually polled, never the span from `activeSince`. The span also covers a suspend and any interval skipped because
+  `onlyWhenFocused` left the window in the background, neither of which the day's total folds, so reporting it made the
+  two rows disagree.
+
 ## Version and Release
 
-| File           | Role                                                                                   |
-| -------------- | -------------------------------------------------------------------------------------- |
-| `VERSION`      | Source of truth for the extension version                                              |
-| `package.json` | Synced by `make bump-version` (including `package-lock.json`)                          |
-| `README.md`    | VSIX install examples synced by `make bump-version`; release history synced on publish |
-| `CHANGELOG.md` | `[Unreleased]` during development; finalized by the release workflow on publish        |
+| File           | Role                                                                            |
+| -------------- | ------------------------------------------------------------------------------- |
+| `VERSION`      | Source of truth for the extension version                                       |
+| `package.json` | Synced by `make bump-version` (including `package-lock.json`)                   |
+| `README.md`    | VSIX install examples synced by `make bump-version`                             |
+| `CHANGELOG.md` | `[Unreleased]` during development; finalized by the release workflow on publish |
 
 Use `make bump-version X.Y.Z` to update `VERSION` and synchronize the other version files. The release workflow is:
 
@@ -109,9 +142,8 @@ make package
 # Tag vX.Y.Z, create the GitHub release, then publish it.
 ```
 
-Publishing a GitHub release runs `.github/workflows/release.yml`, which uploads the VSIX and commits finalized
-`CHANGELOG.md` and README release history to `main`. Do not list a version in README's release history until it is
-published. Tag and push only when explicitly requested.
+Publishing a GitHub release runs `.github/workflows/release.yml`, which uploads the VSIX and commits the finalized
+`CHANGELOG.md` to `main`. Tag and push only when explicitly requested.
 
 ## Agent Guidelines
 

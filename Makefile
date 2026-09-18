@@ -157,8 +157,8 @@ bump-version:
 	@bash "$(MAKEFILE_DIR)scripts/bump-version.sh" $(if $(BUMP_VERSION),"$(BUMP_VERSION)")
 	@$(LOGGER) log_success "Version bump complete"
 
-# Finalize CHANGELOG and README release history for a published version (also run by release.yml).
-.PHONY: update-release-docs ## Finalize CHANGELOG and README for VERSION
+# Finalize CHANGELOG for a published version (also run by release.yml).
+.PHONY: update-release-docs ## Finalize CHANGELOG for VERSION
 update-release-docs:
 	@$(LOGGER) log_target "Updating release documentation"
 	@bash "$(MAKEFILE_DIR)scripts/update-release-docs.sh" "$(EXTENSION_VERSION)" "$(or $(RELEASE_DATE),$(shell date -u +%Y-%m-%d))"

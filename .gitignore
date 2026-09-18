@@ -2,3 +2,6 @@ node_modules/
 out/
 *.vsix
 .DS_Store
+
+# Superseded README screenshots, kept locally in case they are wanted again.
+docs/archive/

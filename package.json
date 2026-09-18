@@ -4,7 +4,7 @@
 	"displayName": "Cursor Approve",
 	"description": "Automatically approves Cursor's pending agent tool calls by invoking Cursor's own approval command.",
 	"icon": "logo512.png",
-	"version": "0.3.2",
+	"version": "0.4.0",
 	"author": {
 		"name": "Todd Papaioannou",
 		"email": "drluckyspin@gmail.com"
@@ -19,7 +19,7 @@
 		"url": "https://github.com/drluckyspin/cursor-approve/issues"
 	},
 	"engines": {
-		"vscode": "^1.90.0"
+		"vscode": "^1.93.0"
 	},
 	"categories": [
 		"Other"
@@ -49,6 +49,11 @@
 			{
 				"command": "cursorApprove.diagnose",
 				"title": "Show Diagnostics",
+				"category": "Cursor Approve"
+			},
+			{
+				"command": "cursorApprove.copyDashboard",
+				"title": "Copy Dashboard Image",
 				"category": "Cursor Approve"
 			},
 			{
@@ -94,6 +99,11 @@
 					"type": "boolean",
 					"default": true,
 					"description": "Show a status bar item indicating whether automatic approval is active."
+				},
+				"cursorApprove.statusBarPriority": {
+					"type": "number",
+					"default": -100,
+					"markdownDescription": "Where the item sits in the right-hand status bar group. Higher values move it further **left**; lower or negative values move it further **right**. Changing this recreates the item."
 				},
 				"cursorApprove.statusBarStyle": {
 					"type": "string",

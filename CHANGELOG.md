@@ -7,6 +7,132 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- A theme-native status-bar dashboard with the extension logo, configuration state, how long automatic approval has been
+  active this session and today in an aligned column, and safe links to toggle approval, open diagnostics, open
+  settings, and copy the dashboard as a PNG from the footer **camera** icon.
+- **Copy Dashboard Image** renders the hover dashboard as a theme-accurate PNG on the clipboard for bug reports or chat.
+  The Command Palette command and the footer camera icon share the same action; a short-lived editor tab opens while the
+  image is rendered, then closes automatically.
+- The dashboard reports an unavailable approval command, unsuccessful attempts, focused-window-only approval, and
+  `allowlist` mode as dedicated lines only while those conditions apply, keeping the hover readable. The severity lines
+  carry a pill colored from the status bar's error and warning colors.
+- `cursorApprove.statusBarPriority` positions the status bar item within the right-hand group.
+- Active-time metrics persist across extension-host reloads and reset on the user's local calendar day.
+- The dashboard reports approvals against the commands that ran in Cursor's agent terminals while automatic approval was
+  active, as `5/12 Auto Approved`, for the session and the current day. Agent terminals are identified by the
+  `Agent Terminal` and `Cursor (` name prefixes Cursor uses internally, and the gap between the two numbers is the work
+  Cursor auto-ran from its own allowlist or sandbox, which never needed an approval.
+- The approved figure is attributed by timing: a command released by an approval is credited when it starts within 100ms
+  of the invocation, measured against observed latencies of 44 to 75ms, while one Cursor auto-ran starts at an arbitrary
+  point in the poll cycle.
+- **Show Diagnostics** reports terminal activity per terminal name and the delay between invoking the approval command
+  and an agent command starting, which is the measurement the attribution threshold is derived from.
+
+### Changed
+
+- The dashboard no longer reports approval-command invocations. Cursor's command resolves the same way whether it
+  approved a request or found nothing pending, so the count only restated the poll interval and implied activity the
+  extension cannot measure.
+- The dashboard stays current instead of holding a snapshot: it is rebuilt each poll and reassigned only when its
+  rendered text changes, which at minute granularity avoids redrawing a hovered tooltip.
+- The extension now requires VS Code 1.93 or later for the terminal shell integration API used by the approval probe.
+
+### Fixed
+
+- **Show Diagnostics** could leave the previously selected Output channel in place. Revealing the panel restores that
+  channel asynchronously, so the extension now selects its own channel after the view settles.
+- Active time counted hours the machine spent suspended, because it was derived from a single start timestamp. Each
+  interval is now folded in as it passes and a gap far longer than the poll interval is discarded.
+- The dashboard could report the previous day's total after midnight while automatic approval was off, since no poll was
+  running to notice the date change. The daily bucket now rolls when the dashboard is rendered and at local midnight.
+- The approval probe no longer reads terminal command lines. The event covers every execution the host exposes,
+  including commands the user typed, whose arguments routinely carry secrets.
+- Deactivation no longer rejects when the final metrics write fails; the failure is logged instead.
+- Command availability now checks the command for the configured mode and is rechecked when the mode changes, so a
+  missing `allowlist` command is reported instead of being masked by the `run` command's presence.
+- **Current Window** replaces the per-session row and measures exactly the span **Active since** names: it restarts when
+  the machine wakes from a suspend and is cut at local midnight, and its counts restart with it. The previous row
+  measured the extension host's lifetime, so it could report more time than the day beside it and carry yesterday's
+  approvals into this morning's figures.
+- Repeated approval failures no longer force an extension-storage write on every poll.
+- Daily totals are shared correctly across Cursor windows. Each window runs its own extension host with its own copy of
+  `globalState` and never sees another's writes, so whichever window checkpointed last overwrote the day's numbers. The
+  totals now live in a file under the extension's global storage that each window re-reads and merges into: counts sum
+  across windows, and active time is folded once from a shared checkpoint rather than once per window.
+- Totals recorded by builds that counted suspended time or raced between windows are discarded rather than carried into
+  the corrected accounting.
+- Changing any `cursorApprove.*` setting while automatic approval was active restarted the current stretch, so editing
+  the interval, mode, or a color reset **Active since** and discarded **Current Window** and its counts. A stretch now
+  opens or closes only when the enabled state itself changes.
+- A failed approval invocation left its timestamp in place, so an agent command that started within the attribution
+  window could be counted as approved by a call that approved nothing.
+- The day's totals went stale in a window with automatic approval switched off. Nothing polled there, so nothing re-read
+  the shared record while other windows kept adding to it. The dashboard now re-reads it, rate-limited, and redraws only
+  when the totals changed.
+- **Current Window** could include time the machine spent suspended for up to one poll interval after waking, until the
+  next poll discarded the gap, while the day's total beside it had already refused to count it.
+- The copied image could render a mangled clock time. The dashboard snapshot is UTF-8 but the webview decoded it one
+  byte per character, which was enough to corrupt an en-US time, since the meridiem is separated by a narrow no-break
+  space.
+- The midnight rollover redrew the dashboard without cutting the current stretch, so a hover taken before the next poll
+  showed a window spanning yesterday beside a day total that had already reset.
+- **Approve Pending Tool Call Once** fed the approval attribution, so a command the user released by hand could be
+  counted on a row that reports automatic approvals.
+- Copying the image on Linux required `xclip` specifically. `wl-copy` is now tried as well, and the error names both
+  rather than reporting whichever ran last.
+- PowerShell is now invoked with `-Sta`, which the clipboard API requires. Windows PowerShell has defaulted to it since
+  3.0, so this is explicit rather than corrective.
+- The PNG handed to the platform clipboard is written into a directory created by `mkdtemp` rather than to a name
+  derived from the clock. The predictable path could be pre-created as a symlink by another local process, which would
+  have made copying an image overwrite a file of that process's choosing.
+- The temporary path reaches `osascript` as an argument read from `argv` instead of being interpolated into the script.
+  It derives from `TMPDIR`, so a quote or newline in that variable could have ended the string literal and run the rest
+  as AppleScript.
+- With `onlyWhenFocused` enabled, working in another application for longer than the gap tolerance looked like a
+  suspend, so returning to the window discarded the stretch and its counts.
+- A settings change left nothing to measure the next gap from, so a machine that slept before the following poll counted
+  the sleep as active until that poll arrived.
+- Reloading the extension host within the fold tolerance counted the shutdown gap as active time. The corrected
+  checkpoint was only held in memory, and merging re-reads the file.
+- The per-terminal breakdown in **Show Diagnostics** stopped counting once twelve distinct terminal names had been seen,
+  including for terminals already listed, so it read as activity having stopped while the totals above it kept climbing.
+  The cap now limits how many names are tracked rather than how long they are counted.
+- **Current Window** is banked interval by interval as each poll passes, rather than measured as the span from **Active
+  since**. The span covered time the window was not checking anything — a suspend, or time in another application with
+  `onlyWhenFocused` enabled — while the day's total folds only intervals a window polled through, so the two rows could
+  disagree by the length of an unfocused stretch.
+- **Total Today** is credited with the time a window actually polled through rather than the bare interval since the
+  last checkpoint, which had counted any gap no window was polling. With `onlyWhenFocused` enabled, returning to an
+  unfocused window inflated the day by up to the fold tolerance.
+- The first poll after returning focus no longer banks the interval the window spent in the background.
+- A **Copy Dashboard** tab could be left open when the webview never reported itself ready, since the caller does not
+  hold the panel until it does.
+- Invoking **Copy Dashboard Image** while a copy is running reported that the clipboard had been written, when that
+  invocation did nothing.
+- Changing `intervalMs` while automatic approval was active dropped the time since the previous poll from both the
+  window and the day, because the checkpoint was restarted without banking it first.
+- A window with nothing banked no longer advances the shared checkpoint. One that had just opened, or that was flushing
+  for **Show Diagnostics** before its first poll, could move the clock past an interval another window had polled
+  through, and that window lost it.
+- Toggling automatic approval redraws the dashboard once the final merge lands, rather than leaving the previous totals
+  on screen until some later event rebuilt it.
+- Turning automatic approval off, and shutting the extension host down, each dropped the part-interval since the last
+  poll. Both now bank it before the stretch is cleared, which is what their comments already claimed.
+- **Copy Dashboard Image** timed out whenever the webview took longer than 400ms to load. The page announces itself
+  once, and the listener waiting for it was torn down at 400ms before a second one was installed, so the announcement
+  was lost. One listener now covers the whole wait and the panel is revealed on a timer instead.
+- A poll no longer starts while the previous one is still waiting on Cursor's approval command. An approval slower than
+  the interval had its invocation timestamp overwritten by the next poll, which attributed the released command to the
+  wrong invocation or dropped it from the approved figure.
+- Cutting the stretch at local midnight now discards the poll cursor with it, so the first poll of the new day cannot
+  bank the interval that straddled the boundary into it.
+- Shutdown waits for a poll already awaiting Cursor's approval command. Clearing the timer does not stop the one
+  running, so anything it recorded afterwards landed after the final merge and went with the host.
+- Restarting the poll loop after a settings change no longer marks the checkpoint as polled. With `onlyWhenFocused`
+  enabled and the window in the background, the first focused poll banked the interval since the change as active.
+
 ## [0.3.2] - 2026-09-09
 
 ### Changed
