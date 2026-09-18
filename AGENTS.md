@@ -116,6 +116,10 @@ When changing dashboard metrics, preserve these safeguards:
 - Active time must accrue as it passes, not from a single start timestamp, so that time the machine spent suspended is
   discarded rather than reported as active. The gap tolerance follows the interval that opened the current checkpoint
   window, so that changing `intervalMs` cannot retroactively reclassify that window as suspended time.
+- That applies to the window row too. Report `windowMetrics.activeMs`, banked by `updateActiveStretch` on the ticks that
+  actually polled, never the span from `activeSince`. The span also covers a suspend and any interval skipped because
+  `onlyWhenFocused` left the window in the background, neither of which the day's total folds, so reporting it made the
+  two rows disagree.
 
 ## Version and Release
 

@@ -131,6 +131,15 @@ const MIN_ACTIVE_GAP_TOLERANCE_MS = 5_000;
 interface WindowMetrics {
 	unsuccessfulAttempts: number;
 	lastAttemptAt: number | undefined;
+
+	/**
+	 * Time actually polled through during the stretch.
+	 *
+	 * Accrued interval by interval rather than measured from `activeSince`, so
+	 * that a suspend, or a stretch of `onlyWhenFocused` with this window in the
+	 * background, is absent from the figure instead of being spanned by it.
+	 */
+	activeMs: number;
 	/**
 	 * Commands that started in an agent terminal while approval was active.
 	 *
@@ -309,6 +318,7 @@ function createWindowMetrics(): WindowMetrics {
 	return {
 		unsuccessfulAttempts: 0,
 		lastAttemptAt: undefined,
+		activeMs: 0,
 		commandsRun: 0,
 		commandsApproved: 0,
 	};
@@ -334,6 +344,10 @@ function startActiveStretch(now: number): void {
  * the stretch restarts rather than claiming to span it. A stretch is also cut
  * at local midnight, so the window figures never describe part of yesterday
  * while the day's figures beside them start at 00:00.
+ *
+ * Reached only from `recordPoll`, which is why the interval banked below is time
+ * this window genuinely polled through, and why an interval skipped for
+ * `onlyWhenFocused` never reaches it.
  */
 function updateActiveStretch(now: number): void {
 	if (activeSince === undefined) {
@@ -342,27 +356,26 @@ function updateActiveStretch(now: number): void {
 		startActiveStretch(now);
 	} else if (activeSince < startOfLocalDay(now)) {
 		startActiveStretch(startOfLocalDay(now));
+	} else if (lastPollAt !== undefined) {
+		windowMetrics.activeMs += now - lastPollAt;
 	}
 
 	lastPollAt = now;
 }
 
 /**
- * How long the current stretch has run, measured from what "Active since" shows.
+ * Time this window was active during the current stretch.
  *
- * A suspend is discarded when the next poll notices it, but the dashboard can
- * be rendered before that poll arrives, so the same gap is excluded here too.
- * Otherwise waking the machine would show a stretch containing the whole sleep
- * for up to one poll interval, beside a day total that had already refused to
- * count it.
+ * The banked total rather than the span from `activeSince`, because the two are
+ * not the same figure: a suspend, and any interval skipped because
+ * `onlyWhenFocused` left this window in the background, fall inside the span
+ * but were not active. Reporting the span made the window row disagree with the
+ * day beside it, which folds only intervals some window polled through.
+ *
+ * Trails the clock by at most one poll interval, which minute granularity hides.
  */
-function activeStretchMs(now = Date.now()): number {
-	if (activeSince === undefined) {
-		return 0;
-	}
-
-	const end = lastPollAt !== undefined && isSuspendGap(now - lastPollAt) ? lastPollAt : now;
-	return Math.max(0, end - activeSince);
+function activeStretchMs(): number {
+	return activeSince === undefined ? 0 : windowMetrics.activeMs;
 }
 
 function createSharedDailyRecord(now = Date.now()): SharedDailyRecord {
@@ -1040,7 +1053,7 @@ function buildDashboardSnapshot(logoUri: string | undefined): DashboardSnapshot 
 		activeSince: enabled && activeSince !== undefined ? formatClockTime(activeSince) : undefined,
 		window: enabled && activeSince !== undefined
 			? {
-				duration: formatDurationPlain(activeStretchMs(now)),
+				duration: formatDurationPlain(activeStretchMs()),
 				approved: windowMetrics.commandsApproved,
 				run: windowMetrics.commandsRun,
 			}
@@ -1356,7 +1369,7 @@ function statusBarTooltip(enabled: boolean): vscode.MarkdownString {
 		rows.push(`<tr><td>Active since&nbsp;&nbsp;</td><td colspan="5">${formatClockTime(activeSince)}</td></tr>`);
 		rows.push(metricRow(
 			"Current Window",
-			formatDuration(activeStretchMs(now)),
+			formatDuration(activeStretchMs()),
 			windowMetrics.commandsApproved,
 			windowMetrics.commandsRun,
 		));

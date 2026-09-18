@@ -150,10 +150,12 @@ Hover over the **Auto Approve** status item to pop up a small stats dashboard.
 
 <!-- markdownlint-enable MD033 -->
 
-**Current Window** measures exactly the stretch that **Active since** names, so the two never disagree. That stretch
-begins when you turn automatic approval on, and begins again when the machine wakes from a long sleep or when the clock
-passes local midnight — its counts restart with it. **Total Today** keeps accumulating from midnight and is shared
-across your open Cursor windows.
+The stretch that **Active since** names begins when you turn automatic approval on, and begins again when the machine
+wakes from a long sleep or when the clock passes local midnight, with its counts restarting alongside it. **Current
+Window** is the time within that stretch that this window spent actually checking for approvals, which is why it can
+read as less than the clock has moved since **Active since**: a sleep is excluded, and so is time you spent in another
+application if `onlyWhenFocused` is on. **Total Today** accumulates the same way from midnight and is shared across your
+open Cursor windows.
 
 `2 / 3 Auto Approved` means Cursor Approve approved two of the three agent commands that ran during that period.
 Commands Cursor auto-ran itself, through its own allowlist or sandbox, count toward the total but not the approved

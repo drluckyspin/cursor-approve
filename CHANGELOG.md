@@ -98,6 +98,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - The per-terminal breakdown in **Show Diagnostics** stopped counting once twelve distinct terminal names had been seen,
   including for terminals already listed, so it read as activity having stopped while the totals above it kept climbing.
   The cap now limits how many names are tracked rather than how long they are counted.
+- **Current Window** is banked interval by interval as each poll passes, rather than measured as the span from **Active
+  since**. The span covered time the window was not checking anything — a suspend, or time in another application with
+  `onlyWhenFocused` enabled — while the day's total folds only intervals a window polled through, so the two rows could
+  disagree by the length of an unfocused stretch.
 
 ## [0.3.2] - 2026-09-09
 
