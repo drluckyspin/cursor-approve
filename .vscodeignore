@@ -1,6 +1,9 @@
 .github/**
 .vscode/**
-docs/*.mov
+.vscodeignore
+# README screenshots are not packaged: vsce rewrites the relative <img> paths to
+# raw URLs on the repository, so the extension page fetches them from GitHub.
+docs/**
 AGENTS.md
 Makefile
 VERSION
