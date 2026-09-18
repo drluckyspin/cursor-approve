@@ -86,6 +86,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - The PNG handed to the platform clipboard is written into a directory created by `mkdtemp` rather than to a name
   derived from the clock. The predictable path could be pre-created as a symlink by another local process, which would
   have made copying an image overwrite a file of that process's choosing.
+- The temporary path reaches `osascript` as an argument read from `argv` instead of being interpolated into the script.
+  It derives from `TMPDIR`, so a quote or newline in that variable could have ended the string literal and run the rest
+  as AppleScript.
 
 ## [0.3.2] - 2026-09-09
 

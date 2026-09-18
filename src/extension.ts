@@ -1196,10 +1196,15 @@ async function writePngToClipboard(png: Buffer): Promise<void> {
 		await fs.writeFile(temporary, png, { flag: "wx" });
 
 		if (process.platform === "darwin") {
-			const escaped = temporary.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+			// The path is passed as an argument and read from `argv` rather than
+			// interpolated into the script. `os.tmpdir()` follows TMPDIR, so a
+			// path holding a quote or a newline could otherwise close the string
+			// literal and have the rest of it run as AppleScript.
 			await execFileAsync("osascript", [
 				"-e",
-				`set the clipboard to (read (POSIX file "${escaped}") as «class PNGf»)`,
+				"on run argv\nset the clipboard to "
+				+ "(read (POSIX file (item 1 of argv)) as «class PNGf»)\nend run",
+				temporary,
 			]);
 			return;
 		}
