@@ -131,8 +131,8 @@ const APPROVAL_CALL_LIMIT = 1000;
 /** Most of the renderer log read in one pass, so a burst cannot stall a tick. */
 const RENDERER_LOG_READ_LIMIT = 1024 * 1024;
 
-/** Longest unterminated line carried between reads before it is dropped. */
-const RENDERER_LOG_REMAINDER_LIMIT = 64 * 1024;
+/** Most capped reads one drain makes, about this many MiB of backlog. */
+const RENDERER_LOG_DRAIN_PASSES = 64;
 
 /** How many resolved approval requests diagnostics lists, newest last. */
 const RECENT_RESOLUTION_LIMIT = 20;
@@ -352,8 +352,8 @@ let rendererLogPath: string | undefined;
  */
 let rendererLogOffset: number | undefined;
 
-/** Unterminated tail of the last read, completed by the next one. */
-let rendererLogRemainder = "";
+/** True when the last read was capped short of the end of the log. */
+let rendererLogBacklog = false;
 
 /** The renderer log read currently running, so reads never interleave. */
 let rendererLogReadInFlight: Promise<void> | undefined;
@@ -1899,7 +1899,16 @@ async function drainRendererLog(): Promise<void> {
 		await new Promise((resolve) => setTimeout(resolve, wait));
 	}
 
-	await scanRendererLog();
+	// Each read is capped, so a backlog takes several. Stops once a read
+	// reaches the end, makes no progress, or the pass limit is hit.
+	for (let pass = 0; pass < RENDERER_LOG_DRAIN_PASSES; pass++) {
+		const before = rendererLogOffset;
+		await scanRendererLog();
+
+		if (!rendererLogBacklog || rendererLogOffset === before) {
+			break;
+		}
+	}
 }
 
 /**
@@ -1936,42 +1945,54 @@ async function readRendererLog(): Promise<void> {
 
 		// The first read replays recent history only to learn which requests
 		// are already pending. Crediting it would count approvals from before
-		// this extension host started.
+		// this extension host started. The offset is set only once the read
+		// completes, so a read abandoned below is replayed again, not credited.
 		const replaying = rendererLogOffset === undefined;
 
-		if (replaying) {
-			rendererLogOffset = Math.max(0, size - RENDERER_LOG_READ_LIMIT);
-			rendererLogRemainder = "";
-		} else if (size < (rendererLogOffset ?? 0)) {
-			// The log shrank, so Cursor replaced it. Everything in the
-			// replacement was written since the last read, so it is read from
-			// the start and counted, and requests still pending carry over.
-			rendererLogOffset = 0;
-			rendererLogRemainder = "";
-		}
-
-		const start = rendererLogOffset ?? 0;
+		// After the first read, a log smaller than the offset means Cursor
+		// replaced it. Everything in the replacement was written since the last
+		// read, so it is read from the start and counted, and requests still
+		// pending carry over.
+		const start = rendererLogOffset === undefined
+			? Math.max(0, size - RENDERER_LOG_READ_LIMIT)
+			: size < rendererLogOffset
+			? 0
+			: rendererLogOffset;
 		const length = Math.min(size - start, RENDERER_LOG_READ_LIMIT);
+		let next = start;
 
 		if (length > 0) {
 			const buffer = Buffer.alloc(length);
 			const { bytesRead } = await handle.read(buffer, 0, length, start);
-			rendererLogOffset = start + bytesRead;
 
-			const lines = (rendererLogRemainder + buffer.toString("utf8", 0, bytesRead)).split("\n");
-			const remainder = lines.pop() ?? "";
-			rendererLogRemainder = remainder.length > RENDERER_LOG_REMAINDER_LIMIT ? "" : remainder;
+			// An approval call that started while this read waited on the file
+			// may have its resume in the buffer, so the lines are left for the
+			// read after it completes.
+			if (approvalCallsInFlight > 0) {
+				return;
+			}
 
-			for (const line of lines) {
+			// Stops after the last complete line, so a line Cursor is still
+			// writing is read whole next time rather than held in memory in
+			// between. A full buffer with no line break is one line far too
+			// long to be a wakelock line, and is skipped.
+			const lastBreak = bytesRead === 0 ? -1 : buffer.lastIndexOf(0x0a, bytesRead - 1);
+			const complete = lastBreak !== -1 ? lastBreak + 1 : bytesRead === RENDERER_LOG_READ_LIMIT ? bytesRead : 0;
+			next = start + complete;
+
+			for (const line of buffer.toString("utf8", 0, complete).split("\n")) {
 				readRendererLogLine(line, !replaying);
 			}
 		}
+
+		rendererLogOffset = next;
+		rendererLogBacklog = size - start > RENDERER_LOG_READ_LIMIT;
 
 		// Once a read reaches the end of the log, every line still to come is
 		// stamped after the read started, give or take Cursor's write
 		// buffering, so a call too old to be matched by any of them can go. A
 		// capped read stops short of the end and discards nothing.
-		if (rendererLogOffset === size) {
+		if (!rendererLogBacklog) {
 			const oldest = readStartedAt - RENDERER_LOG_WRITE_SLACK_MS - APPROVAL_RESUME_WINDOW_MS;
 
 			while (recentApprovalCalls.length > 0 && recentApprovalCalls[0].at < oldest) {

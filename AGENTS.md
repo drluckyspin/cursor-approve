@@ -100,8 +100,9 @@ When changing dashboard metrics, preserve these safeguards:
   above `context.logUri`. Run **Show Diagnostics** after upgrading Cursor to confirm the log is still found and still
   logs requests.
 - Read that log for those two lines only. Capture the timestamp, action, reason, and chat ID, and never copy, store, or
-  log any other part of it. Start each extension host by replaying recent history to learn which requests are already
-  pending, without counting anything from it.
+  log any other part of it. Stop each read after its last complete line rather than carrying a partial one to the next.
+  Start each extension host by replaying recent history to learn which requests are already pending, without counting
+  anything from it.
 - Credit a resolved request to this extension only when the agent resumed within `APPROVAL_RESUME_WINDOW_MS` of one of
   this window's poll calls returning, after the request was logged, and take that call so it is never credited twice. On
   Cursor 3.27.22 agents resumed 7 to 10ms after the call that released them, while a click on Run lands anywhere in the
