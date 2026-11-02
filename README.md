@@ -158,7 +158,8 @@ application if `onlyWhenFocused` is on. **Total Today** accumulates the same way
 open Cursor windows.
 
 `3 Auto Approved` means Cursor Approve approved three pending agent requests during that period. Commands Cursor ran on
-its own, through its allowlist or sandbox, and requests you approved yourself are not counted.
+its own, through its allowlist or sandbox, are not counted, and neither are requests you approved yourself, unless you
+happened to click within a tenth of a second of one of Cursor Approve's checks in a chat it could not approve.
 
 Cursor's approval command reports nothing back, so the count comes from the log Cursor already writes for each window.
 Cursor logs a line when an agent stops to ask for approval and another when it resumes, and Cursor Approve counts a

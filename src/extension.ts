@@ -100,17 +100,33 @@ const WAKELOCK_LINE =
  * and still be credited to it.
  *
  * On Cursor 3.27.22 agents resumed 7 to 10ms after the approval call that
- * released them returned. A click on Run lands anywhere in the poll interval,
- * so a narrow window keeps the user's own approvals out of the count while
- * leaving room for a busy window.
+ * released them returned, so this leaves ten times that for a busy window. A
+ * click on Run lands anywhere in the poll interval, and since the call must
+ * also follow the request, a click can only be miscounted in a chat the poll
+ * could not approve, and then only if it lands this soon after a poll.
  */
-const APPROVAL_RESUME_WINDOW_MS = 250;
+const APPROVAL_RESUME_WINDOW_MS = 100;
 
 /** Tolerance for a resume logged just before the poll call's reply arrived. */
 const APPROVAL_RESUME_EARLY_MS = 50;
 
-/** How long a poll call's return time is kept for crediting a later log line. */
-const POLL_CALL_RETENTION_MS = 30_000;
+/**
+ * How long after it is stamped a renderer log line may reach the file.
+ *
+ * Cursor buffers log writes for a fraction of a second; this is generous, and
+ * only decides how long an approval call is kept before it is discarded as
+ * too old for any line still to come.
+ */
+const RENDERER_LOG_WRITE_SLACK_MS = 10_000;
+
+/**
+ * How long after the last approval call a drain waits for its resume to be
+ * logged before reading the log one final time.
+ */
+const RENDERER_LOG_DRAIN_MS = 500;
+
+/** Most approval calls kept while the log cannot be read, oldest dropped first. */
+const APPROVAL_CALL_LIMIT = 1000;
 
 /** Most of the renderer log read in one pass, so a burst cannot stall a tick. */
 const RENDERER_LOG_READ_LIMIT = 1024 * 1024;
@@ -215,11 +231,29 @@ interface ApprovalLogMetrics {
 	requests: number;
 	/** Requests since activation that were answered and the agent resumed. */
 	resolved: number;
+	/** Recently resolved requests, oldest first. */
+	recent: ResolvedRequest[];
+}
+
+/** One approval call this window made, for matching against the log. */
+interface ApprovalCall {
+	/** When the call returned. */
+	at: number;
+	/** False for Approve Pending Tool Call Once, which is never counted. */
+	poll: boolean;
+}
+
+/** A resolved approval request, as diagnostics reports it. */
+interface ResolvedRequest {
+	/** When the agent resumed. */
+	at: number;
 	/**
-	 * Recently resolved requests, with the delay from the poll call credited
-	 * for each, or undefined when none was close enough and so not counted.
+	 * The delay from the poll call credited with the approval, or undefined
+	 * when it was not counted.
 	 */
-	recent: { at: number; delayMs: number | undefined }[];
+	delayMs: number | undefined;
+	/** True when Approve Pending Tool Call Once released it instead. */
+	manual: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -324,11 +358,14 @@ let rendererLogRemainder = "";
 /** The renderer log read currently running, so reads never interleave. */
 let rendererLogReadInFlight: Promise<void> | undefined;
 
-/** Chats whose agent has asked for approval and not yet resumed. */
-const pendingApprovalChats = new Set<string>();
+/**
+ * Chats whose agent has asked for approval and not yet resumed, with when
+ * each asked.
+ */
+const pendingApprovalChats = new Map<string, number>();
 
-/** When this window's recent poll calls returned, oldest first. */
-const recentPollCalls: number[] = [];
+/** This window's recent successful approval calls, oldest first. */
+const recentApprovalCalls: ApprovalCall[] = [];
 
 const approvalLog: ApprovalLogMetrics = {
 	available: false,
@@ -866,6 +903,14 @@ function updateActiveStretchForSetting(enabled: boolean): void {
 	// time it was still on, and dropping it would lose up to a flush interval
 	// on every toggle.
 	void flushSharedDaily(true, true).finally(() => updateStatusBar());
+
+	// The last poll may have released a request whose resume is not logged
+	// yet, and nothing reads the log once polling stops. Merged with folding
+	// on, which credits nothing now that the bank is empty, so the shared
+	// checkpoint another active window measures from is left where it is.
+	void drainRendererLog()
+		.then(() => flushSharedDaily(true, true))
+		.finally(() => updateStatusBar());
 }
 
 /** Note that the poll loop ran, so the stretch and the day stay current. */
@@ -876,11 +921,22 @@ function recordPoll(): void {
 	void flushSharedDaily();
 }
 
-/** Record an approval the poll granted, for this window and the day. */
-function recordApproval(): void {
-	windowMetrics.approvals++;
-	pendingDaily.approvals++;
-	void flushSharedDaily();
+/**
+ * Record an approval the poll granted, for this window and the day.
+ *
+ * Attributed by when the agent resumed, not when the log was read, which can
+ * be a poll interval or more later. An approval read after midnight or after
+ * the stretch restarted belongs to neither the new day nor the new stretch.
+ */
+function recordApproval(at: number): void {
+	if (activeSince !== undefined && at >= activeSince) {
+		windowMetrics.approvals++;
+	}
+
+	if (localDateKey(new Date(at)) === localDateKey()) {
+		pendingDaily.approvals++;
+		void flushSharedDaily();
+	}
 }
 
 /** Record a failed automatic command invocation for this window and the day. */
@@ -935,12 +991,10 @@ async function approveOnce(reason: string): Promise<boolean> {
 		await vscode.commands.executeCommand(command);
 		consecutiveErrorCount = 0;
 
-		// Only poll calls can be credited with a resume in the renderer log. A
-		// request the user released through Approve Pending Tool Call Once was
-		// not approved automatically.
-		if (reason === "poll") {
-			recordPollCall(Date.now());
-		}
+		// Manual calls are recorded too, though never credited: a request the
+		// user released through Approve Pending Tool Call Once was not
+		// approved automatically, and must not be matched to an earlier poll.
+		recordApprovalCall({ at: Date.now(), poll: reason === "poll" });
 
 		output.debug(`Invoked ${command} (${reason})`);
 		return true;
@@ -1761,38 +1815,68 @@ function recordLatency(sinceInvocation: number | undefined): void {
 	probeMetrics.latencyBuckets[bucket === -1 ? PROBE_LATENCY_BUCKETS_MS.length : bucket]++;
 }
 
-/** Remember when a poll call returned, dropping ones too old to be credited. */
-function recordPollCall(at: number): void {
-	recentPollCalls.push(at);
+/**
+ * Remember an approval call for matching against the log.
+ *
+ * Calls are discarded by how far the log has been read, not by age, so one
+ * stays matchable however long polling or reading pauses; the cap only bounds
+ * the list while the log cannot be read at all.
+ */
+function recordApprovalCall(call: ApprovalCall): void {
+	recentApprovalCalls.push(call);
 
-	while (recentPollCalls.length > 0 && recentPollCalls[0] < at - POLL_CALL_RETENTION_MS) {
-		recentPollCalls.shift();
+	if (recentApprovalCalls.length > APPROVAL_CALL_LIMIT) {
+		recentApprovalCalls.shift();
 	}
 }
 
 /**
- * Take the poll call that released an agent resumed at `at`: the latest one
- * returning at most `APPROVAL_RESUME_WINDOW_MS` before it. The call is removed,
- * so a single call is never credited twice.
+ * Take the call that released a request asked for at `requestedAt` and
+ * resumed at `resumedAt`: the latest one returning after the request, and at
+ * most `APPROVAL_RESUME_WINDOW_MS` before the resume. The call is removed, so
+ * one call is never matched twice.
  *
- * @returns The delay from that call to the resume, or undefined if none fits.
+ * A call from before the request cannot have released it, however close it
+ * returned to the resume. Without that check, a click on Run shortly after a
+ * poll that found nothing pending was counted as the poll's approval.
  */
-function takeCreditedPollCall(at: number): number | undefined {
-	for (let index = recentPollCalls.length - 1; index >= 0; index--) {
-		const delayMs = at - recentPollCalls[index];
+function takeReleasingCall(requestedAt: number, resumedAt: number): ApprovalCall | undefined {
+	for (let index = recentApprovalCalls.length - 1; index >= 0; index--) {
+		const call = recentApprovalCalls[index];
 
 		// Calls are oldest first, so every one before this is further away.
-		if (delayMs > APPROVAL_RESUME_WINDOW_MS) {
+		if (call.at <= requestedAt || resumedAt - call.at > APPROVAL_RESUME_WINDOW_MS) {
 			break;
 		}
 
-		if (delayMs >= -APPROVAL_RESUME_EARLY_MS) {
-			recentPollCalls.splice(index, 1);
-			return delayMs;
+		if (resumedAt - call.at >= -APPROVAL_RESUME_EARLY_MS) {
+			recentApprovalCalls.splice(index, 1);
+			return call;
 		}
 	}
 
 	return undefined;
+}
+
+/**
+ * Read the resume of the last approval call before polling stops.
+ *
+ * The log is otherwise read only on polls, so the approval the last one
+ * released would stay unread, and be lost to a reload, since activation
+ * replays the log without counting it. Waits only while a request is still
+ * outstanding and that call is recent enough for its resume to be in flight.
+ */
+async function drainRendererLog(): Promise<void> {
+	await tickInFlight?.catch(() => undefined);
+	await scanRendererLog();
+
+	const lastCall = recentApprovalCalls[recentApprovalCalls.length - 1];
+	const wait = lastCall === undefined ? 0 : lastCall.at + RENDERER_LOG_DRAIN_MS - Date.now();
+
+	if (pendingApprovalChats.size > 0 && wait > 0) {
+		await new Promise((resolve) => setTimeout(resolve, wait));
+		await scanRendererLog();
+	}
 }
 
 /**
@@ -1817,6 +1901,7 @@ async function readRendererLog(): Promise<void> {
 	}
 
 	let handle: fs.FileHandle | undefined;
+	const readStartedAt = Date.now();
 
 	try {
 		handle = await fs.open(rendererLogPath, "r");
@@ -1851,6 +1936,18 @@ async function readRendererLog(): Promise<void> {
 			}
 		}
 
+		// Once a read reaches the end of the log, every line still to come is
+		// stamped after the read started, give or take Cursor's write
+		// buffering, so a call too old to be matched by any of them can go. A
+		// capped read stops short of the end and discards nothing.
+		if (rendererLogOffset === size) {
+			const oldest = readStartedAt - RENDERER_LOG_WRITE_SLACK_MS - APPROVAL_RESUME_WINDOW_MS;
+
+			while (recentApprovalCalls.length > 0 && recentApprovalCalls[0].at < oldest) {
+				recentApprovalCalls.shift();
+			}
+		}
+
 		approvalLog.available = true;
 		approvalLog.lastError = undefined;
 	} catch (error) {
@@ -1875,10 +1972,19 @@ function readRendererLogLine(line: string, credit: boolean): void {
 	}
 
 	const [, year, month, day, hour, minute, second, millisecond, action, reason, chatId] = match;
+	const at = new Date(
+		Number(year),
+		Number(month) - 1,
+		Number(day),
+		Number(hour),
+		Number(minute),
+		Number(second),
+		Number(millisecond),
+	).getTime();
 
 	if (action === "Released") {
 		if (reason === "user-approval-requested") {
-			pendingApprovalChats.add(chatId);
+			pendingApprovalChats.set(chatId, at);
 
 			if (credit) {
 				approvalLog.requests++;
@@ -1890,32 +1996,25 @@ function readRendererLogLine(line: string, credit: boolean): void {
 
 	// Any other acquisition means the agent moved on without the request being
 	// answered, such as a new turn after the user stopped it.
-	const wasPending = pendingApprovalChats.delete(chatId);
+	const requestedAt = pendingApprovalChats.get(chatId);
+	pendingApprovalChats.delete(chatId);
 
-	if (!credit || !wasPending || reason !== "agent-loop-resumed") {
+	if (!credit || requestedAt === undefined || reason !== "agent-loop-resumed") {
 		return;
 	}
 
-	const at = new Date(
-		Number(year),
-		Number(month) - 1,
-		Number(day),
-		Number(hour),
-		Number(minute),
-		Number(second),
-		Number(millisecond),
-	).getTime();
-	const delayMs = takeCreditedPollCall(at);
+	const call = takeReleasingCall(requestedAt, at);
+	const delayMs = call?.poll ? at - call.at : undefined;
 
 	approvalLog.resolved++;
-	approvalLog.recent.push({ at, delayMs });
+	approvalLog.recent.push({ at, delayMs, manual: call !== undefined && !call.poll });
 
 	if (approvalLog.recent.length > RECENT_RESOLUTION_LIMIT) {
 		approvalLog.recent.shift();
 	}
 
 	if (delayMs !== undefined) {
-		recordApproval();
+		recordApproval(at);
 		// At info level so every counted approval can be audited from the log
 		// without re-running diagnostics.
 		output.info(`Counted an approval: the agent resumed ${delayMs}ms after this window's approval call.`);
@@ -2134,7 +2233,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			await scanRendererLog();
 			output.info("--- Approval log ---");
 			output.info("Approvals are counted from this window's Cursor renderer log: an agent asks for");
-			output.info(`approval, then resumes within ${APPROVAL_RESUME_WINDOW_MS}ms of this window's approval call.`);
+			output.info("approval, this window's poll calls Cursor after that, and the agent resumes");
+			output.info(`within ${APPROVAL_RESUME_WINDOW_MS}ms of the call returning.`);
 			output.info(`rendererLog        ${rendererLogPath ?? "unavailable"}`);
 			output.info(`rendererLogRead    ${approvalLog.available}`);
 			output.info(`rendererLogError   ${approvalLog.lastError ?? "none"}`);
@@ -2145,14 +2245,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			if (approvalLog.recent.length === 0) {
 				output.info("  none");
 			}
-			for (const { at, delayMs } of approvalLog.recent) {
-				output.info(
-					`  ${formatPreciseTime(at)} ${
-						delayMs === undefined
-							? "not counted: no approval call from this window just before"
-							: `counted, ${delayMs}ms after this window's approval call`
-					}`,
-				);
+			for (const { at, delayMs, manual } of approvalLog.recent) {
+				const outcome = delayMs !== undefined
+					? `counted, ${delayMs}ms after this window's approval call`
+					: manual
+					? "not counted: released by Approve Pending Tool Call Once"
+					: "not counted: no poll call from this window released it";
+				output.info(`  ${formatPreciseTime(at)} ${outcome}`);
 			}
 			output.info("--- Agent terminal probe ---");
 			output.info(`terminalsOpened    ${probeMetrics.terminalsOpened}`);
@@ -2213,11 +2312,12 @@ export async function deactivate(): Promise<void> {
 		rolloverTimer = undefined;
 	}
 
-	// Let a poll already inside `approveOnce` finish first. Clearing the timer
-	// does not stop the one running, and anything it went on to record — an
-	// agent execution, a failed attempt — would land in `pendingDaily` after
-	// the final merge and be lost with the host.
-	await tickInFlight?.catch(() => undefined);
+	// Let a poll already inside `approveOnce` finish first, then read the
+	// approval it or the poll before it released. Clearing the timer does not
+	// stop the one running, and anything it went on to record — an approval, a
+	// failed attempt — would land in `pendingDaily` after the final merge and
+	// be lost with the host, whose successor replays the log without counting.
+	await drainRendererLog();
 
 	// Bank the part-interval since the last poll, then merge before the stretch
 	// is cleared, so this window's last interval and any unmerged counts reach
