@@ -99,7 +99,10 @@ When changing dashboard metrics, preserve these safeguards:
   its own extension host with its own in-memory copy of `globalState`, never sees another window's writes, and
   overwrites the shared value wholesale, which made the totals a race between windows. Keep the merge semantics: re-read
   immediately before writing, add counts as per-window deltas, and fold active time once from the shared checkpoint so
-  concurrent windows cannot double-count a global setting.
+  concurrent windows cannot double-count a global setting. Write the file through a temporary file and an atomic rename:
+  `vscode.workspace.fs.rename` with `overwrite` deletes the target first, and a window that read in that gap started the
+  day over. Treat only a missing file as empty, and never write totals lower than ones this window has already seen
+  today.
 - Keep every dashboard value at minute granularity or coarser. The tooltip is rebuilt each tick and reassigned only when
   its rendered text changes, so a per-second value would redraw a hovered tooltip every second.
 - Restrict trusted Markdown command links to the explicit dashboard command allowlist. Keep the tooltip background

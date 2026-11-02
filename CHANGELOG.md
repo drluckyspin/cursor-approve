@@ -7,6 +7,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- **Total Today** could reset to zero mid-day and drop counts another window had added. Replacing the shared totals file
+  briefly removed it, and a window that read it in that gap started the day over. The file is now replaced atomically, a
+  failed read postpones the merge instead of resetting it, and a window never writes totals lower than ones it has
+  already seen today.
+
 ## [0.4.0] - 2026-09-18
 
 ### Added

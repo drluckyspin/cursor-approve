@@ -420,48 +420,100 @@ function sharedDailyUri(): vscode.Uri | undefined {
 		: vscode.Uri.joinPath(extensionContext.globalStorageUri, SHARED_DAILY_FILE);
 }
 
-/** Read the shared record, or undefined when it is missing or unreadable. */
+/**
+ * Read the shared record.
+ *
+ * Resolves undefined when the file is absent or its contents are not a record,
+ * and throws on any other failure, so that a merge which cannot read the file
+ * postpones rather than proceeding as if the day had no totals.
+ */
 async function readSharedDaily(): Promise<SharedDailyRecord | undefined> {
 	const uri = sharedDailyUri();
 	if (uri === undefined) {
 		return undefined;
 	}
 
+	let text: string;
 	try {
-		const parsed = JSON.parse(new TextDecoder().decode(await vscode.workspace.fs.readFile(uri)));
-
-		if (
-			typeof parsed?.date === "string"
-			&& typeof parsed.activeMs === "number"
-			&& typeof parsed.lastCheckpointAt === "number"
-		) {
-			return {
-				date: parsed.date,
-				activeMs: parsed.activeMs,
-				lastCheckpointAt: parsed.lastCheckpointAt,
-				unsuccessfulAttempts: typeof parsed.unsuccessfulAttempts === "number" ? parsed.unsuccessfulAttempts : 0,
-				commandsRun: typeof parsed.commandsRun === "number" ? parsed.commandsRun : 0,
-				commandsApproved: typeof parsed.commandsApproved === "number" ? parsed.commandsApproved : 0,
-			};
+		text = await fs.readFile(uri.fsPath, "utf8");
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+			return undefined;
 		}
-	} catch {
-		// Missing on the first run, and a partial write is not worth reporting:
-		// the merge below simply starts the day over.
+		throw error;
 	}
 
-	return undefined;
+	let parsed: Partial<SharedDailyRecord> | undefined;
+	try {
+		parsed = JSON.parse(text);
+	} catch {
+		return undefined;
+	}
+
+	if (
+		typeof parsed?.date !== "string"
+		|| typeof parsed.activeMs !== "number"
+		|| typeof parsed.lastCheckpointAt !== "number"
+	) {
+		return undefined;
+	}
+
+	return {
+		date: parsed.date,
+		activeMs: parsed.activeMs,
+		lastCheckpointAt: parsed.lastCheckpointAt,
+		unsuccessfulAttempts: typeof parsed.unsuccessfulAttempts === "number" ? parsed.unsuccessfulAttempts : 0,
+		commandsRun: typeof parsed.commandsRun === "number" ? parsed.commandsRun : 0,
+		commandsApproved: typeof parsed.commandsApproved === "number" ? parsed.commandsApproved : 0,
+	};
 }
 
-/** Write through a temporary file, so a reader never sees a half-written record. */
+/**
+ * Write through a temporary file and an atomic rename, so the record is never
+ * absent or half-written to a reader in another window.
+ *
+ * Node's rename rather than `workspace.fs.rename`: with `overwrite` the latter
+ * deletes the target before moving the replacement into place. Another window
+ * reading in that gap found no file and started the day over, and its next
+ * write erased the real totals.
+ */
 async function writeSharedDaily(record: SharedDailyRecord): Promise<void> {
 	const uri = sharedDailyUri();
 	if (uri === undefined) {
 		return;
 	}
 
-	const temporary = uri.with({ path: `${uri.path}.${process.pid}.tmp` });
-	await vscode.workspace.fs.writeFile(temporary, new TextEncoder().encode(JSON.stringify(record)));
-	await vscode.workspace.fs.rename(temporary, uri, { overwrite: true });
+	const temporary = `${uri.fsPath}.${process.pid}.tmp`;
+	try {
+		await fs.writeFile(temporary, JSON.stringify(record));
+		await fs.rename(temporary, uri.fsPath);
+	} catch (error) {
+		await fs.rm(temporary, { force: true }).catch(() => {});
+		throw error;
+	}
+}
+
+/**
+ * Raise a record's totals to those this window has already seen today.
+ *
+ * Within a day every total only grows, so a lower figure on disk means some
+ * writer lost data, most likely a window still running a build that reset the
+ * file whenever a read failed. Carrying forward what was seen repairs it rather
+ * than adopting the loss. Nothing is inflated: each figure was on disk at some
+ * point today.
+ */
+function keepSeenTotals(record: SharedDailyRecord): SharedDailyRecord {
+	if (sharedDaily.date !== record.date) {
+		return record;
+	}
+
+	return {
+		...record,
+		activeMs: Math.max(record.activeMs, sharedDaily.activeMs),
+		unsuccessfulAttempts: Math.max(record.unsuccessfulAttempts, sharedDaily.unsuccessfulAttempts),
+		commandsRun: Math.max(record.commandsRun, sharedDaily.commandsRun),
+		commandsApproved: Math.max(record.commandsApproved, sharedDaily.commandsApproved),
+	};
 }
 
 /**
@@ -509,9 +561,17 @@ async function mergeSharedDaily(now: number, foldActive: boolean): Promise<void>
 	unfoldedActiveMs = 0;
 
 	try {
-		let record = await readSharedDaily() ?? createSharedDailyRecord(now);
+		const today = localDateKey(new Date(now));
+		const stored = await readSharedDaily();
+		let record: SharedDailyRecord;
 
-		if (record.date !== localDateKey(new Date(now))) {
+		if (stored?.date === today) {
+			record = keepSeenTotals(stored);
+		} else if (stored === undefined && sharedDaily.date === today) {
+			// The file vanished or was corrupted mid-day. Rebuilding from the
+			// last record seen keeps the day's totals instead of zeroing them.
+			record = { ...sharedDaily };
+		} else {
 			record = createSharedDailyRecord(now);
 		}
 
@@ -586,13 +646,14 @@ async function reloadSharedDailyIfStale(): Promise<void> {
 				return;
 			}
 
-			const changed = stored.activeMs !== sharedDaily.activeMs
-				|| stored.commandsRun !== sharedDaily.commandsRun
-				|| stored.commandsApproved !== sharedDaily.commandsApproved
-				|| stored.unsuccessfulAttempts !== sharedDaily.unsuccessfulAttempts;
+			const next = keepSeenTotals(stored);
+			const changed = next.activeMs !== sharedDaily.activeMs
+				|| next.commandsRun !== sharedDaily.commandsRun
+				|| next.commandsApproved !== sharedDaily.commandsApproved
+				|| next.unsuccessfulAttempts !== sharedDaily.unsuccessfulAttempts;
 
 			if (changed) {
-				sharedDaily = stored;
+				sharedDaily = next;
 				updateStatusBar();
 			}
 		} catch (error) {
@@ -656,7 +717,14 @@ async function loadSharedDaily(context: vscode.ExtensionContext): Promise<void> 
 		output.warn(`Unable to create the extension storage directory: ${String(error)}`);
 	}
 
-	const stored = await readSharedDaily();
+	let stored: SharedDailyRecord | undefined;
+	try {
+		stored = await readSharedDaily();
+	} catch (error) {
+		// The first merge re-reads the file, so the day's totals are adopted
+		// then rather than lost.
+		output.warn(`Unable to read the shared daily metrics: ${String(error)}`);
+	}
 
 	// A checkpoint from an earlier run must not extend into this one: the time
 	// between them is time no window was running.
