@@ -358,6 +358,9 @@ let rendererLogRemainder = "";
 /** The renderer log read currently running, so reads never interleave. */
 let rendererLogReadInFlight: Promise<void> | undefined;
 
+/** Approval calls awaiting Cursor's reply, during which the log is not read. */
+let approvalCallsInFlight = 0;
+
 /**
  * Chats whose agent has asked for approval and not yet resumed, with when
  * each asked.
@@ -988,7 +991,15 @@ async function approveOnce(reason: string): Promise<boolean> {
 	lastInvocationAt = reason === "poll" ? Date.now() : undefined;
 
 	try {
-		await vscode.commands.executeCommand(command);
+		// Recorded below without an await in between, so no log read can run
+		// after the reply and before the call is matchable.
+		approvalCallsInFlight++;
+		try {
+			await vscode.commands.executeCommand(command);
+		} finally {
+			approvalCallsInFlight--;
+		}
+
 		consecutiveErrorCount = 0;
 
 		// Manual calls are recorded too, though never credited: a request the
@@ -1832,30 +1843,42 @@ function recordApprovalCall(call: ApprovalCall): void {
 
 /**
  * Take the call that released a request asked for at `requestedAt` and
- * resumed at `resumedAt`: the latest one returning after the request, and at
- * most `APPROVAL_RESUME_WINDOW_MS` before the resume. The call is removed, so
- * one call is never matched twice.
+ * resumed at `resumedAt`: of the calls returning after the request and at most
+ * `APPROVAL_RESUME_WINDOW_MS` before the resume, the latest; failing that, the
+ * earliest returning within `APPROVAL_RESUME_EARLY_MS` after it. The call is
+ * removed, so one call is never matched twice.
  *
  * A call from before the request cannot have released it, however close it
  * returned to the resume. Without that check, a click on Run shortly after a
- * poll that found nothing pending was counted as the poll's approval.
+ * poll that found nothing pending was counted as the poll's approval. Calls
+ * that returned before the resume are preferred, so a poll returning just
+ * after a manual call cannot take its credit.
  */
 function takeReleasingCall(requestedAt: number, resumedAt: number): ApprovalCall | undefined {
+	let earlyIndex: number | undefined;
+
 	for (let index = recentApprovalCalls.length - 1; index >= 0; index--) {
 		const call = recentApprovalCalls[index];
+		const delayMs = resumedAt - call.at;
 
 		// Calls are oldest first, so every one before this is further away.
-		if (call.at <= requestedAt || resumedAt - call.at > APPROVAL_RESUME_WINDOW_MS) {
+		if (call.at <= requestedAt || delayMs > APPROVAL_RESUME_WINDOW_MS) {
 			break;
 		}
 
-		if (resumedAt - call.at >= -APPROVAL_RESUME_EARLY_MS) {
+		if (delayMs >= 0) {
 			recentApprovalCalls.splice(index, 1);
 			return call;
 		}
+
+		// Overwritten as the search moves back, so it ends on the call that
+		// returned nearest after the resume.
+		if (delayMs >= -APPROVAL_RESUME_EARLY_MS) {
+			earlyIndex = index;
+		}
 	}
 
-	return undefined;
+	return earlyIndex === undefined ? undefined : recentApprovalCalls.splice(earlyIndex, 1)[0];
 }
 
 /**
@@ -1863,20 +1886,20 @@ function takeReleasingCall(requestedAt: number, resumedAt: number): ApprovalCall
  *
  * The log is otherwise read only on polls, so the approval the last one
  * released would stay unread, and be lost to a reload, since activation
- * replays the log without counting it. Waits only while a request is still
- * outstanding and that call is recent enough for its resume to be in flight.
+ * replays the log without counting it. Waits only while that call is recent
+ * enough for its request and resume to still be in Cursor's write buffer.
  */
 async function drainRendererLog(): Promise<void> {
 	await tickInFlight?.catch(() => undefined);
-	await scanRendererLog();
 
 	const lastCall = recentApprovalCalls[recentApprovalCalls.length - 1];
 	const wait = lastCall === undefined ? 0 : lastCall.at + RENDERER_LOG_DRAIN_MS - Date.now();
 
-	if (pendingApprovalChats.size > 0 && wait > 0) {
+	if (wait > 0) {
 		await new Promise((resolve) => setTimeout(resolve, wait));
-		await scanRendererLog();
 	}
+
+	await scanRendererLog();
 }
 
 /**
@@ -1896,7 +1919,11 @@ function scanRendererLog(): Promise<void> {
 
 /** The body of `scanRendererLog`, which keeps reads from interleaving. */
 async function readRendererLog(): Promise<void> {
-	if (rendererLogPath === undefined) {
+	// A resume can be logged just before its call's reply arrives. Read then,
+	// it would resolve the request before the call that released it could be
+	// matched, and the approval would be lost. Every poll reads once its call
+	// completes, so skipping here misses nothing.
+	if (rendererLogPath === undefined || approvalCallsInFlight > 0) {
 		return;
 	}
 
@@ -1907,16 +1934,20 @@ async function readRendererLog(): Promise<void> {
 		handle = await fs.open(rendererLogPath, "r");
 		const { size } = await handle.stat();
 
-		// The first read, and any read after the log shrank because Cursor
-		// replaced it, replays recent history only to learn which requests are
-		// already pending. Crediting it would count approvals from before this
-		// extension host started.
-		const replaying = rendererLogOffset === undefined || size < rendererLogOffset;
+		// The first read replays recent history only to learn which requests
+		// are already pending. Crediting it would count approvals from before
+		// this extension host started.
+		const replaying = rendererLogOffset === undefined;
 
 		if (replaying) {
 			rendererLogOffset = Math.max(0, size - RENDERER_LOG_READ_LIMIT);
 			rendererLogRemainder = "";
-			pendingApprovalChats.clear();
+		} else if (size < (rendererLogOffset ?? 0)) {
+			// The log shrank, so Cursor replaced it. Everything in the
+			// replacement was written since the last read, so it is read from
+			// the start and counted, and requests still pending carry over.
+			rendererLogOffset = 0;
+			rendererLogRemainder = "";
 		}
 
 		const start = rendererLogOffset ?? 0;
@@ -1958,6 +1989,38 @@ async function readRendererLog(): Promise<void> {
 	}
 }
 
+/** Year, month (1-based), day, hour, minute, second, and millisecond. */
+type LocalTimeFields = [number, number, number, number, number, number, number];
+
+/**
+ * The instant a renderer log timestamp refers to. Cursor stamps lines in local
+ * time with no offset.
+ *
+ * In the hour repeated when daylight saving time ends, each local time occurs
+ * twice and the `Date` constructor picks the first. A line is read within a
+ * poll or so of being written, so the occurrence nearer the read is the one
+ * meant. Without this, every approval in the second occurrence resolved an
+ * hour before the call that released it and went uncounted.
+ */
+function localLogTime([year, month, day, hour, minute, second, millisecond]: LocalTimeFields): number {
+	const first = new Date(year, month - 1, day, hour, minute, second, millisecond).getTime();
+
+	// How far the clock falls back within a day of this time, if it does.
+	const fallBackMs = (new Date(first + 86_400_000).getTimezoneOffset() - new Date(first).getTimezoneOffset())
+		* 60_000;
+
+	if (fallBackMs <= 0) {
+		return first;
+	}
+
+	const repeat = first + fallBackMs;
+	const repeatTime = new Date(repeat);
+	const repeats = repeatTime.getHours() === hour && repeatTime.getMinutes() === minute;
+	const now = Date.now();
+
+	return repeats && Math.abs(now - repeat) < Math.abs(now - first) ? repeat : first;
+}
+
 /**
  * Apply one renderer log line to the pending-request state.
  *
@@ -1972,15 +2035,9 @@ function readRendererLogLine(line: string, credit: boolean): void {
 	}
 
 	const [, year, month, day, hour, minute, second, millisecond, action, reason, chatId] = match;
-	const at = new Date(
-		Number(year),
-		Number(month) - 1,
-		Number(day),
-		Number(hour),
-		Number(minute),
-		Number(second),
-		Number(millisecond),
-	).getTime();
+	const at = localLogTime(
+		[year, month, day, hour, minute, second, millisecond].map(Number) as LocalTimeFields,
+	);
 
 	if (action === "Released") {
 		if (reason === "user-approval-requested") {
@@ -2230,6 +2287,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			output.info(`sharedFile         ${sharedDailyUri()?.fsPath ?? "unavailable"}`);
 			output.info(`consecutiveUnsuccessful ${consecutiveErrorCount}`);
 			output.info(`lastUnsuccessful   ${lastError ?? "none"}`);
+			// After any poll in flight, whose call would otherwise skip the read.
+			await tickInFlight?.catch(() => undefined);
 			await scanRendererLog();
 			output.info("--- Approval log ---");
 			output.info("Approvals are counted from this window's Cursor renderer log: an agent asks for");

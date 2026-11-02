@@ -106,13 +106,17 @@ When changing dashboard metrics, preserve these safeguards:
   this window's poll calls returning, after the request was logged, and take that call so it is never credited twice. On
   Cursor 3.27.22 agents resumed 7 to 10ms after the call that released them, while a click on Run lands anywhere in the
   poll interval. A call from before the request cannot have released it, and without that check a click shortly after an
-  idle poll counted. Record **Approve Pending Tool Call Once** calls too: one matched to a request consumes it without
-  credit, because it was not approved automatically.
+  idle poll counted. Prefer the latest call that returned before the resume over one that returned just after it. Record
+  **Approve Pending Tool Call Once** calls too: one matched to a request consumes it without credit, because it was not
+  approved automatically. Never read the log while an approval call awaits its reply, since a resume read before its
+  call is recorded is lost.
 - Attribute each approval by when the agent resumed, not when the log was read, so one read after midnight or after the
   stretch restarted lands in neither. Discard approval calls by how far the log has been read, never by age: a poll
   interval of up to 30 seconds, or an `onlyWhenFocused` pause, would otherwise expire a call before its resume is read.
   Drain the log when polling stops and before the final merge on shutdown, since the next extension host replays it
-  without counting.
+  without counting. Only that first read replays; a log Cursor replaces mid-session is read from its start and counted.
+  Log timestamps are local time without an offset, so resolve the hour repeated when daylight saving time ends to the
+  occurrence nearer the read.
 - Never infer approvals from how long the approval call takes. With nothing pending, Cursor's handler took anywhere from
   4ms to a second, often in several windows at once, and timing it, even against a baseline call queued just ahead,
   counted dozens of approvals in idle windows. A log line that goes missing reads as zero rather than too many.
