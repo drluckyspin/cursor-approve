@@ -7,6 +7,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- **Show Diagnostics** reports whether the window's Cursor log was found, how many approval requests it has logged, and
+  which recent requests were counted.
+
+### Changed
+
+- The dashboard reports approvals as `3 Auto Approved` for the current window and for the day, with no ratio. They are
+  counted from the log Cursor writes for each window, which records when an agent asks for approval and when it resumes;
+  a request counts when the agent resumed right after one of the extension's checks. Only those two kinds of line are
+  read, and nothing but the count is kept. Counts recorded by earlier builds are discarded.
+- The dashboard no longer reports the agent commands that ran. Cursor 3.27.12 moved agent chats onto its Agent Host
+  runtime, which runs commands without a terminal the extension can see, so for those chats both figures read zero.
+  Terminal activity stays in **Show Diagnostics**.
+
 ### Fixed
 
 - **Total Today** could reset to zero mid-day and drop counts another window had added. Replacing the shared totals file

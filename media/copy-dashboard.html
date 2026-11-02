@@ -136,31 +136,23 @@
 			y += lineHeight;
 		}
 
-		function drawMetricRow(label, duration, approved, run) {
+		function drawMetricRow(label, duration, approvals) {
 			context.fillStyle = foreground;
 			context.fillText(label, padding, y);
 			context.fillText(duration, textX + 72, y);
 
-			const ratio = `${approved.toLocaleString()}/${run.toLocaleString()} Auto Approved`;
-			context.fillText(ratio, width - padding - measureText(context, ratio), y);
+			// Right-aligned as a whole, so the label lines up between rows and the
+			// counts right-align against it.
+			const count = `${approvals.toLocaleString()} Auto Approved`;
+			context.fillText(count, width - padding - measureText(context, count), y);
 			y += lineHeight;
 		}
 
 		if (snapshot.window) {
-			drawMetricRow(
-				'Current Window',
-				snapshot.window.duration,
-				snapshot.window.approved,
-				snapshot.window.run,
-			);
+			drawMetricRow('Current Window', snapshot.window.duration, snapshot.window.approvals);
 		}
 
-		drawMetricRow(
-			'Total Today',
-			snapshot.today.duration,
-			snapshot.today.approved,
-			snapshot.today.run,
-		);
+		drawMetricRow('Total Today', snapshot.today.duration, snapshot.today.approvals);
 
 		for (const alert of snapshot.alerts) {
 			let x = padding;

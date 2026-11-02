@@ -75,31 +75,59 @@ const AGENT_TERMINAL_PREFIXES = ["Agent Terminal", "Cursor ("] as const;
  * Upper bounds for the measured delay between invoking the approval command and
  * an agent command starting.
  *
- * A command this extension approves should start within a few frames of the
- * invocation, while one Cursor auto-ran from its own allowlist starts whenever
- * the agent asked for it. If the delays cluster tightly, attribution is
- * possible; if they spread across the poll interval, they are coincidence.
+ * Reported by diagnostics only. It measures chats on Cursor's older runtime,
+ * the only ones whose commands raise terminal events.
  */
 const PROBE_LATENCY_BUCKETS_MS = [100, 250, 500, 1000] as const;
 
 /**
- * Delay within which an agent command is credited to this extension.
+ * A wakelock line in Cursor's renderer log, which is how approvals are counted.
  *
- * Measured, not guessed. Commands that needed approval started 44, 50, 57, and
- * 75ms after the invocation that released them, because the execution begins a
- * few frames after `executeCommand` resolves. Commands Cursor auto-ran from its
- * own allowlist or sandbox landed uniformly across the poll interval — 56, 155,
- * 248, 262, 607, 662, 908ms — since nothing was pending and the poll had no
- * effect on them.
- *
- * The two populations therefore separate on latency alone. Every real approval
- * falls inside this window; the error is unrelated executions that happen to
- * land in it, at a rate of roughly this window divided by the poll interval, so
- * about one in ten auto-run commands at the default one second. The count is
- * deliberately not presented with a margin: it is close, and a visible error
- * bar would cost more clarity than the precision is worth.
+ * Cursor's approval command returns nothing whether it approved a request or
+ * found nothing pending, and timing it does not work either: with nothing
+ * pending the handler took anywhere from 4ms to a second, often in several
+ * windows at once. Cursor does log both halves of an approval, though. When an
+ * agent stops to ask, the window releases its wakelock for that chat with
+ * `user-approval-requested`; once the request is answered it acquires one
+ * again with `agent-loop-resumed`. Only the timestamp, action, reason, and chat
+ * ID are captured; nothing else in the log is read into memory or kept.
  */
-const APPROVAL_ATTRIBUTION_MS = 100;
+const WAKELOCK_LINE =
+	/^(\d{4})-(\d\d)-(\d\d) (\d\d):(\d\d):(\d\d)\.(\d{3}) \[info\] \[ComposerWakelockManager\] (Acquired|Released) wakelock id=\d+ reason="([^"]+)" composerId=([0-9A-Za-z-]+)/;
+
+/**
+ * How long after one of this window's poll calls returns an agent may resume
+ * and still be credited to it.
+ *
+ * On Cursor 3.27.22 agents resumed 7 to 10ms after the approval call that
+ * released them returned. A click on Run lands anywhere in the poll interval,
+ * so a narrow window keeps the user's own approvals out of the count while
+ * leaving room for a busy window.
+ */
+const APPROVAL_RESUME_WINDOW_MS = 250;
+
+/** Tolerance for a resume logged just before the poll call's reply arrived. */
+const APPROVAL_RESUME_EARLY_MS = 50;
+
+/** How long a poll call's return time is kept for crediting a later log line. */
+const POLL_CALL_RETENTION_MS = 30_000;
+
+/** Most of the renderer log read in one pass, so a burst cannot stall a tick. */
+const RENDERER_LOG_READ_LIMIT = 1024 * 1024;
+
+/** Longest unterminated line carried between reads before it is dropped. */
+const RENDERER_LOG_REMAINDER_LIMIT = 64 * 1024;
+
+/** How many resolved approval requests diagnostics lists, newest last. */
+const RECENT_RESOLUTION_LIMIT = 20;
+
+/**
+ * Version stamped on the shared daily record. Approvals are carried over only
+ * from records with this version, because builds before it inferred them from
+ * terminal activity or call timing and mostly counted approvals that never
+ * happened.
+ */
+const SHARED_DAILY_VERSION = 2;
 
 /** Cap on distinct terminal names tracked, since a name follows the running process. */
 const PROBE_TERMINAL_NAME_LIMIT = 12;
@@ -131,16 +159,9 @@ interface WindowMetrics {
 	 * background, is absent from the figure instead of being spanned by it.
 	 */
 	activeMs: number;
-	/**
-	 * Commands that started in an agent terminal while approval was active.
-	 *
-	 * Includes commands Cursor auto-ran from its own allowlist or sandbox, which
-	 * needed no approval from anyone.
-	 */
-	commandsRun: number;
 
-	/** The subset of those commands this extension released, by `APPROVAL_ATTRIBUTION_MS`. */
-	commandsApproved: number;
+	/** Approvals this window's poll granted, read from Cursor's renderer log. */
+	approvals: number;
 }
 
 /**
@@ -152,28 +173,26 @@ interface WindowMetrics {
  * two.
  */
 interface SharedDailyRecord {
+	/** `SHARED_DAILY_VERSION` of the build that wrote the record. */
+	version: number;
 	date: string;
 	activeMs: number;
 	lastCheckpointAt: number;
 	unsuccessfulAttempts: number;
-	commandsRun: number;
-	commandsApproved: number;
+	approvals: number;
 }
 
 /** Counts this window has not yet merged into the shared file. */
 interface PendingDailyDelta {
 	unsuccessfulAttempts: number;
-	commandsRun: number;
-	commandsApproved: number;
+	approvals: number;
 }
 
 /**
- * Terminal activity an approved shell tool call would produce.
+ * Terminal activity, reported only through logs and diagnostics.
  *
- * Experimental, and reported only through logs and diagnostics: Cursor appears
- * to run agent commands through its own pseudoterminal service, so these events
- * may never fire. Recording them is how we find out whether a genuine approval
- * count is reachable.
+ * It shows which chats still run commands where the extension host can see
+ * them; chats on Cursor's Agent Host runtime, introduced in 3.27.12, do not.
  */
 interface ProbeMetrics {
 	terminalsOpened: number;
@@ -184,6 +203,23 @@ interface ProbeMetrics {
 	executionsByTerminal: Map<string, number>;
 	/** Delay from the last invocation, bucketed by `PROBE_LATENCY_BUCKETS_MS`. */
 	latencyBuckets: number[];
+}
+
+/** What this window has read from Cursor's renderer log, for diagnostics. */
+interface ApprovalLogMetrics {
+	/** Whether the last read found the log. */
+	available: boolean;
+	/** Why the last read failed, if it did. */
+	lastError: string | undefined;
+	/** Approval requests logged since activation. */
+	requests: number;
+	/** Requests since activation that were answered and the agent resumed. */
+	resolved: number;
+	/**
+	 * Recently resolved requests, with the delay from the poll call credited
+	 * for each, or undefined when none was close enough and so not counted.
+	 */
+	recent: { at: number; delayMs: number | undefined }[];
 }
 
 // ---------------------------------------------------------------------------
@@ -273,6 +309,35 @@ let lastTooltipValue: string | undefined;
 /** When the approval command was last invoked, used to correlate probe events. */
 let lastInvocationAt: number | undefined;
 
+/** This window's Cursor renderer log, or undefined if it cannot be located. */
+let rendererLogPath: string | undefined;
+
+/**
+ * Byte offset the next renderer log read starts from. Undefined until the
+ * first read, which replays recent history for pending requests only.
+ */
+let rendererLogOffset: number | undefined;
+
+/** Unterminated tail of the last read, completed by the next one. */
+let rendererLogRemainder = "";
+
+/** The renderer log read currently running, so reads never interleave. */
+let rendererLogReadInFlight: Promise<void> | undefined;
+
+/** Chats whose agent has asked for approval and not yet resumed. */
+const pendingApprovalChats = new Set<string>();
+
+/** When this window's recent poll calls returned, oldest first. */
+const recentPollCalls: number[] = [];
+
+const approvalLog: ApprovalLogMetrics = {
+	available: false,
+	lastError: undefined,
+	requests: 0,
+	resolved: 0,
+	recent: [],
+};
+
 /** Short-lived webview used to render a dashboard PNG for the clipboard. */
 let copyDashboardPanel: vscode.WebviewPanel | undefined;
 
@@ -327,8 +392,7 @@ function createWindowMetrics(): WindowMetrics {
 		unsuccessfulAttempts: 0,
 		lastAttemptAt: undefined,
 		activeMs: 0,
-		commandsRun: 0,
-		commandsApproved: 0,
+		approvals: 0,
 	};
 }
 
@@ -401,17 +465,17 @@ function activeStretchMs(): number {
 
 function createSharedDailyRecord(now = Date.now()): SharedDailyRecord {
 	return {
+		version: SHARED_DAILY_VERSION,
 		date: localDateKey(new Date(now)),
 		activeMs: 0,
 		lastCheckpointAt: now,
 		unsuccessfulAttempts: 0,
-		commandsRun: 0,
-		commandsApproved: 0,
+		approvals: 0,
 	};
 }
 
 function createPendingDailyDelta(): PendingDailyDelta {
-	return { unsuccessfulAttempts: 0, commandsRun: 0, commandsApproved: 0 };
+	return { unsuccessfulAttempts: 0, approvals: 0 };
 }
 
 function sharedDailyUri(): vscode.Uri | undefined {
@@ -459,12 +523,14 @@ async function readSharedDaily(): Promise<SharedDailyRecord | undefined> {
 	}
 
 	return {
+		version: SHARED_DAILY_VERSION,
 		date: parsed.date,
 		activeMs: parsed.activeMs,
 		lastCheckpointAt: parsed.lastCheckpointAt,
 		unsuccessfulAttempts: typeof parsed.unsuccessfulAttempts === "number" ? parsed.unsuccessfulAttempts : 0,
-		commandsRun: typeof parsed.commandsRun === "number" ? parsed.commandsRun : 0,
-		commandsApproved: typeof parsed.commandsApproved === "number" ? parsed.commandsApproved : 0,
+		approvals: parsed.version === SHARED_DAILY_VERSION && typeof parsed.approvals === "number"
+			? parsed.approvals
+			: 0,
 	};
 }
 
@@ -511,8 +577,7 @@ function keepSeenTotals(record: SharedDailyRecord): SharedDailyRecord {
 		...record,
 		activeMs: Math.max(record.activeMs, sharedDaily.activeMs),
 		unsuccessfulAttempts: Math.max(record.unsuccessfulAttempts, sharedDaily.unsuccessfulAttempts),
-		commandsRun: Math.max(record.commandsRun, sharedDaily.commandsRun),
-		commandsApproved: Math.max(record.commandsApproved, sharedDaily.commandsApproved),
+		approvals: Math.max(record.approvals, sharedDaily.approvals),
 	};
 }
 
@@ -608,8 +673,7 @@ async function mergeSharedDaily(now: number, foldActive: boolean): Promise<void>
 		}
 
 		record.unsuccessfulAttempts += merging.unsuccessfulAttempts;
-		record.commandsRun += merging.commandsRun;
-		record.commandsApproved += merging.commandsApproved;
+		record.approvals += merging.approvals;
 
 		await writeSharedDaily(record);
 		sharedDaily = record;
@@ -619,8 +683,7 @@ async function mergeSharedDaily(now: number, foldActive: boolean): Promise<void>
 		// dropping them.
 		unfoldedActiveMs += banked;
 		pendingDaily.unsuccessfulAttempts += merging.unsuccessfulAttempts;
-		pendingDaily.commandsRun += merging.commandsRun;
-		pendingDaily.commandsApproved += merging.commandsApproved;
+		pendingDaily.approvals += merging.approvals;
 		output.warn(`Unable to update the shared daily metrics: ${String(error)}`);
 	}
 }
@@ -648,8 +711,7 @@ async function reloadSharedDailyIfStale(): Promise<void> {
 
 			const next = keepSeenTotals(stored);
 			const changed = next.activeMs !== sharedDaily.activeMs
-				|| next.commandsRun !== sharedDaily.commandsRun
-				|| next.commandsApproved !== sharedDaily.commandsApproved
+				|| next.approvals !== sharedDaily.approvals
 				|| next.unsuccessfulAttempts !== sharedDaily.unsuccessfulAttempts;
 
 			if (changed) {
@@ -814,6 +876,13 @@ function recordPoll(): void {
 	void flushSharedDaily();
 }
 
+/** Record an approval the poll granted, for this window and the day. */
+function recordApproval(): void {
+	windowMetrics.approvals++;
+	pendingDaily.approvals++;
+	void flushSharedDaily();
+}
+
 /** Record a failed automatic command invocation for this window and the day. */
 function recordUnsuccessfulAttempt(): void {
 	windowMetrics.unsuccessfulAttempts++;
@@ -859,19 +928,25 @@ async function checkCommandAvailability(): Promise<boolean> {
 async function approveOnce(reason: string): Promise<boolean> {
 	const command = APPROVE_COMMANDS[currentMode()];
 
-	// Only the poll loop feeds attribution. A command the user released through
-	// Approve Pending Tool Call Once was not approved automatically, so counting
-	// it would contradict the row it lands in.
+	// Only the poll loop feeds the probe latency, like the approval count.
 	lastInvocationAt = reason === "poll" ? Date.now() : undefined;
 
 	try {
 		await vscode.commands.executeCommand(command);
 		consecutiveErrorCount = 0;
+
+		// Only poll calls can be credited with a resume in the renderer log. A
+		// request the user released through Approve Pending Tool Call Once was
+		// not approved automatically.
+		if (reason === "poll") {
+			recordPollCall(Date.now());
+		}
+
 		output.debug(`Invoked ${command} (${reason})`);
 		return true;
 	} catch (error) {
-		// Nothing was released, so the timestamp must not survive to attribute
-		// an agent command that happens to start within the attribution window.
+		// Nothing was released, so the timestamp must not survive to be
+		// measured against an agent command that happens to start next.
 		lastInvocationAt = undefined;
 		consecutiveErrorCount++;
 		lastError = error instanceof Error ? error.message : String(error);
@@ -897,11 +972,10 @@ async function approveOnce(reason: string): Promise<boolean> {
  */
 async function tick(): Promise<void> {
 	// `setInterval` does not wait for the previous callback. An approval command
-	// slower than the interval would otherwise have its invocation timestamp
-	// overwritten by the next tick before the released command started, which
-	// attributes that command to the wrong invocation or loses it. Skipping is
-	// safe: nothing is missed, since the approval already in flight is the one
-	// this tick would have made, and the interval it covers is still banked.
+	// slower than the interval would otherwise overlap the next one, racing it
+	// for the same pending request. Skipping is safe: nothing is missed, since
+	// the approval already in flight is the one this tick would have made, and
+	// the interval it covers is still banked.
 	if (tickInFlight !== undefined) {
 		return;
 	}
@@ -930,6 +1004,10 @@ async function runTick(): Promise<void> {
 
 	recordPoll();
 	const successful = await approveOnce("poll");
+
+	// Credits the approvals earlier polls released. This poll's own resume, if
+	// any, reaches the log a few milliseconds from now and is read next time.
+	await scanRendererLog();
 
 	if (!successful) {
 		recordUnsuccessfulAttempt();
@@ -1006,8 +1084,8 @@ interface DashboardSnapshot {
 	interval: string | undefined;
 	logoUri: string | undefined;
 	activeSince: string | undefined;
-	window: { duration: string; approved: number; run: number } | undefined;
-	today: { duration: string; approved: number; run: number };
+	window: { duration: string; approvals: number } | undefined;
+	today: { duration: string; approvals: number };
 	alerts: Array<
 		| { kind: "pill"; label: string; severity: "error" | "warning"; detail: string }
 		| { kind: "line"; text: string }
@@ -1130,16 +1208,14 @@ function formatInterval(intervalMs: number): string {
 /**
  * Render one metrics row of the dashboard.
  *
- * The ratio is split across three cells, the numerator right-aligned against
- * the slash and the denominator left-aligned after it, so the slashes and the
- * labels that follow line up between rows. Padding the text cannot do this: the
- * hover renders in the UI font, whose digits are proportional, so an equal
- * count of digits is still an unequal width.
+ * The count has its own right-aligned cell so the label after it lines up
+ * between rows. Padding the text cannot do this: the hover renders in the UI
+ * font, whose digits are proportional, so an equal count of digits is still an
+ * unequal width.
  */
-function metricRow(label: string, duration: string, approved: number, run: number): string {
+function metricRow(label: string, duration: string, approvals: number): string {
 	return `<tr><td>${label}&nbsp;&nbsp;</td><td>${duration}&nbsp;&nbsp;&nbsp;</td>`
-		+ `<td align="right">${approved.toLocaleString()}</td><td>/</td>`
-		+ `<td>${run.toLocaleString()}&nbsp;&nbsp;</td><td>Auto Approved</td></tr>`;
+		+ `<td align="right">${approvals.toLocaleString()}</td><td>&nbsp;Auto Approved</td></tr>`;
 }
 
 /** Format a count with thousands separators and a matching noun. */
@@ -1220,14 +1296,12 @@ function buildDashboardSnapshot(logoUri: string | undefined): DashboardSnapshot 
 		window: enabled && activeSince !== undefined
 			? {
 				duration: formatDurationPlain(activeStretchMs()),
-				approved: windowMetrics.commandsApproved,
-				run: windowMetrics.commandsRun,
+				approvals: windowMetrics.approvals,
 			}
 			: undefined,
 		today: {
 			duration: formatDurationPlain(dailyActiveMs(now)),
-			approved: dailyCount("commandsApproved", now),
-			run: dailyCount("commandsRun", now),
+			approvals: dailyCount("approvals", now),
 		},
 		alerts,
 	};
@@ -1531,10 +1605,8 @@ function statusBarTooltip(enabled: boolean): vscode.MarkdownString {
 			+ "</tr></table>\n\n",
 	);
 
-	// How long the confirmation step has been bypassed, and how much of the work
-	// that ran while it was this extension released rather than Cursor
-	// auto-running it under its own rules. The ratio carries both numbers, and
-	// the gap between them is the part worth seeing.
+	// How long the confirmation step has been bypassed, and how many approvals
+	// this extension granted while it was.
 	//
 	// Hovers carry no table styling, so the cells render without borders; the
 	// sanitizer strips cellpadding, so gutters are spaces.
@@ -1545,21 +1617,11 @@ function statusBarTooltip(enabled: boolean): vscode.MarkdownString {
 	if (enabled && activeSince !== undefined) {
 		// Spans the remaining columns so a wide clock time cannot stretch the
 		// column the durations are compared in.
-		rows.push(`<tr><td>Active since&nbsp;&nbsp;</td><td colspan="5">${formatClockTime(activeSince)}</td></tr>`);
-		rows.push(metricRow(
-			"Current Window",
-			formatDuration(activeStretchMs()),
-			windowMetrics.commandsApproved,
-			windowMetrics.commandsRun,
-		));
+		rows.push(`<tr><td>Active since&nbsp;&nbsp;</td><td colspan="3">${formatClockTime(activeSince)}</td></tr>`);
+		rows.push(metricRow("Current Window", formatDuration(activeStretchMs()), windowMetrics.approvals));
 	}
 
-	rows.push(metricRow(
-		"Total Today",
-		formatDuration(dailyActiveMs(now)),
-		dailyCount("commandsApproved", now),
-		dailyCount("commandsRun", now),
-	));
+	rows.push(metricRow("Total Today", formatDuration(dailyActiveMs(now)), dailyCount("approvals", now)));
 
 	markdown.appendMarkdown(`<table>${rows.join("")}</table>\n\n`);
 
@@ -1699,20 +1761,189 @@ function recordLatency(sinceInvocation: number | undefined): void {
 	probeMetrics.latencyBuckets[bucket === -1 ? PROBE_LATENCY_BUCKETS_MS.length : bucket]++;
 }
 
+/** Remember when a poll call returned, dropping ones too old to be credited. */
+function recordPollCall(at: number): void {
+	recentPollCalls.push(at);
+
+	while (recentPollCalls.length > 0 && recentPollCalls[0] < at - POLL_CALL_RETENTION_MS) {
+		recentPollCalls.shift();
+	}
+}
+
+/**
+ * Take the poll call that released an agent resumed at `at`: the latest one
+ * returning at most `APPROVAL_RESUME_WINDOW_MS` before it. The call is removed,
+ * so a single call is never credited twice.
+ *
+ * @returns The delay from that call to the resume, or undefined if none fits.
+ */
+function takeCreditedPollCall(at: number): number | undefined {
+	for (let index = recentPollCalls.length - 1; index >= 0; index--) {
+		const delayMs = at - recentPollCalls[index];
+
+		// Calls are oldest first, so every one before this is further away.
+		if (delayMs > APPROVAL_RESUME_WINDOW_MS) {
+			break;
+		}
+
+		if (delayMs >= -APPROVAL_RESUME_EARLY_MS) {
+			recentPollCalls.splice(index, 1);
+			return delayMs;
+		}
+	}
+
+	return undefined;
+}
+
+/**
+ * Read what Cursor has appended to this window's renderer log since the last
+ * read, crediting each approval request this window's poll released.
+ *
+ * Never rejects. A log that cannot be read leaves the count where it is, and
+ * diagnostics reports why.
+ */
+function scanRendererLog(): Promise<void> {
+	rendererLogReadInFlight ??= readRendererLog().finally(() => {
+		rendererLogReadInFlight = undefined;
+	});
+
+	return rendererLogReadInFlight;
+}
+
+/** The body of `scanRendererLog`, which keeps reads from interleaving. */
+async function readRendererLog(): Promise<void> {
+	if (rendererLogPath === undefined) {
+		return;
+	}
+
+	let handle: fs.FileHandle | undefined;
+
+	try {
+		handle = await fs.open(rendererLogPath, "r");
+		const { size } = await handle.stat();
+
+		// The first read, and any read after the log shrank because Cursor
+		// replaced it, replays recent history only to learn which requests are
+		// already pending. Crediting it would count approvals from before this
+		// extension host started.
+		const replaying = rendererLogOffset === undefined || size < rendererLogOffset;
+
+		if (replaying) {
+			rendererLogOffset = Math.max(0, size - RENDERER_LOG_READ_LIMIT);
+			rendererLogRemainder = "";
+			pendingApprovalChats.clear();
+		}
+
+		const start = rendererLogOffset ?? 0;
+		const length = Math.min(size - start, RENDERER_LOG_READ_LIMIT);
+
+		if (length > 0) {
+			const buffer = Buffer.alloc(length);
+			const { bytesRead } = await handle.read(buffer, 0, length, start);
+			rendererLogOffset = start + bytesRead;
+
+			const lines = (rendererLogRemainder + buffer.toString("utf8", 0, bytesRead)).split("\n");
+			const remainder = lines.pop() ?? "";
+			rendererLogRemainder = remainder.length > RENDERER_LOG_REMAINDER_LIMIT ? "" : remainder;
+
+			for (const line of lines) {
+				readRendererLogLine(line, !replaying);
+			}
+		}
+
+		approvalLog.available = true;
+		approvalLog.lastError = undefined;
+	} catch (error) {
+		approvalLog.available = false;
+		approvalLog.lastError = error instanceof Error ? error.message : String(error);
+	} finally {
+		await handle?.close().catch(() => {});
+	}
+}
+
+/**
+ * Apply one renderer log line to the pending-request state.
+ *
+ * @param credit - False while replaying history from before activation, which
+ *   only establishes which requests are already pending.
+ */
+function readRendererLogLine(line: string, credit: boolean): void {
+	const match = WAKELOCK_LINE.exec(line);
+
+	if (match === null) {
+		return;
+	}
+
+	const [, year, month, day, hour, minute, second, millisecond, action, reason, chatId] = match;
+
+	if (action === "Released") {
+		if (reason === "user-approval-requested") {
+			pendingApprovalChats.add(chatId);
+
+			if (credit) {
+				approvalLog.requests++;
+			}
+		}
+
+		return;
+	}
+
+	// Any other acquisition means the agent moved on without the request being
+	// answered, such as a new turn after the user stopped it.
+	const wasPending = pendingApprovalChats.delete(chatId);
+
+	if (!credit || !wasPending || reason !== "agent-loop-resumed") {
+		return;
+	}
+
+	const at = new Date(
+		Number(year),
+		Number(month) - 1,
+		Number(day),
+		Number(hour),
+		Number(minute),
+		Number(second),
+		Number(millisecond),
+	).getTime();
+	const delayMs = takeCreditedPollCall(at);
+
+	approvalLog.resolved++;
+	approvalLog.recent.push({ at, delayMs });
+
+	if (approvalLog.recent.length > RECENT_RESOLUTION_LIMIT) {
+		approvalLog.recent.shift();
+	}
+
+	if (delayMs !== undefined) {
+		recordApproval();
+		// At info level so every counted approval can be audited from the log
+		// without re-running diagnostics.
+		output.info(`Counted an approval: the agent resumed ${delayMs}ms after this window's approval call.`);
+	}
+}
+
+/** Local wall-clock time with milliseconds, to line a call up against an approval. */
+function formatPreciseTime(timestamp: number): string {
+	const time = new Date(timestamp);
+	const pad = (value: number, width = 2) => String(value).padStart(width, "0");
+	return `${pad(time.getHours())}:${pad(time.getMinutes())}:${pad(time.getSeconds())}.${
+		pad(time.getMilliseconds(), 3)
+	}`;
+}
+
 /** True for the terminals Cursor's agent runs its commands in. */
 function isAgentTerminal(terminal: vscode.Terminal): boolean {
 	return AGENT_TERMINAL_PREFIXES.some((prefix) => terminal.name.startsWith(prefix));
 }
 
 /**
- * Count the commands Cursor's agent actually runs.
+ * Count the agent commands that reach the extension host as terminal executions.
  *
- * These executions do reach the extension host, so the dashboard can report
- * that work is getting through. It still cannot report approvals granted: the
- * same command would run whether this extension approved it, Cursor auto-ran
- * it from its own allowlist, or the user clicked Run. The probe counters
- * alongside it measure how tightly these follow an invocation, which is what
- * would have to hold before any stronger claim could be made.
+ * Diagnostics only. Chats on Cursor's older runtime run commands in an agent
+ * terminal and raise these events; chats on the Agent Host runtime, introduced
+ * in 3.27.12, raise none. Either way the same command runs whether this
+ * extension approved it, Cursor auto-ran it, or the user clicked Run, so these
+ * events cannot count approvals.
  */
 function registerAgentCommandWatcher(context: vscode.ExtensionContext): void {
 	// Terminals that predate activation never raise the open event, so seed the
@@ -1768,22 +1999,6 @@ function registerAgentCommandWatcher(context: vscode.ExtensionContext): void {
 				probeMetrics.agentExecutions++;
 				recordLatency(sinceInvocation);
 
-				// Only while approval is active: otherwise this counts commands the
-				// user approved by hand with the extension switched off.
-				if (isEnabled()) {
-					const approved = sinceInvocation !== undefined && sinceInvocation <= APPROVAL_ATTRIBUTION_MS;
-
-					windowMetrics.commandsRun++;
-					pendingDaily.commandsRun++;
-
-					if (approved) {
-						windowMetrics.commandsApproved++;
-						pendingDaily.commandsApproved++;
-					}
-
-					void flushSharedDaily();
-				}
-
 				output.debug(
 					`probe: agent command in '${terminal.name}' ${sinceInvocation ?? "?"}ms after last invocation`,
 				);
@@ -1837,6 +2052,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	extensionUri = context.extensionUri;
 	await loadSharedDaily(context);
 	void loadCopyDashboardResources(context);
+
+	// The extension's log folder is <window>/exthost/<extension ID>, and Cursor
+	// writes the window's renderer log two levels above it. Read once before
+	// polling starts, so requests already pending are known when it does.
+	rendererLogPath = path.join(context.logUri.fsPath, "..", "..", "renderer.log");
+	await scanRendererLog();
 
 	context.subscriptions.push(output);
 	ensureStatusBarItem();
@@ -1898,21 +2119,42 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			output.info(`windowFocused      ${vscode.window.state.focused}`);
 			output.info(`activeSince        ${activeSince ?? "inactive"}`);
 			output.info(`windowActiveMs     ${activeStretchMs()}`);
-			output.info(`windowCommandsRun  ${windowMetrics.commandsRun}`);
-			output.info(`windowApproved     ${windowMetrics.commandsApproved}`);
+			output.info(`windowApprovals    ${windowMetrics.approvals}`);
 			output.info(`windowUnsuccessful ${windowMetrics.unsuccessfulAttempts}`);
 			output.info(`windowLastPoll     ${windowMetrics.lastAttemptAt ?? "none"}`);
 			output.info("--- Shared across windows ---");
 			output.info(`today              ${sharedDaily.date}`);
 			output.info(`todayEnabledMs     ${dailyActiveMs()}`);
-			output.info(`todayCommandsRun   ${dailyCount("commandsRun")}`);
-			output.info(`todayApproved      ${dailyCount("commandsApproved")}`);
+			output.info(`todayApprovals     ${dailyCount("approvals")}`);
 			output.info(`todayUnsuccessful  ${dailyCount("unsuccessfulAttempts")}`);
 			output.info(`sharedCheckpoint   ${sharedDaily.lastCheckpointAt}`);
 			output.info(`sharedFile         ${sharedDailyUri()?.fsPath ?? "unavailable"}`);
 			output.info(`consecutiveUnsuccessful ${consecutiveErrorCount}`);
 			output.info(`lastUnsuccessful   ${lastError ?? "none"}`);
-			output.info("--- Approval probe (experimental) ---");
+			await scanRendererLog();
+			output.info("--- Approval log ---");
+			output.info("Approvals are counted from this window's Cursor renderer log: an agent asks for");
+			output.info(`approval, then resumes within ${APPROVAL_RESUME_WINDOW_MS}ms of this window's approval call.`);
+			output.info(`rendererLog        ${rendererLogPath ?? "unavailable"}`);
+			output.info(`rendererLogRead    ${approvalLog.available}`);
+			output.info(`rendererLogError   ${approvalLog.lastError ?? "none"}`);
+			output.info(`requestsLogged     ${approvalLog.requests}`);
+			output.info(`requestsResolved   ${approvalLog.resolved}`);
+			output.info(`requestsPending    ${pendingApprovalChats.size}`);
+			output.info(`Recently resolved requests (last ${RECENT_RESOLUTION_LIMIT}):`);
+			if (approvalLog.recent.length === 0) {
+				output.info("  none");
+			}
+			for (const { at, delayMs } of approvalLog.recent) {
+				output.info(
+					`  ${formatPreciseTime(at)} ${
+						delayMs === undefined
+							? "not counted: no approval call from this window just before"
+							: `counted, ${delayMs}ms after this window's approval call`
+					}`,
+				);
+			}
+			output.info("--- Agent terminal probe ---");
 			output.info(`terminalsOpened    ${probeMetrics.terminalsOpened}`);
 			output.info(`shellIntegrations  ${probeMetrics.shellIntegrationsActivated}`);
 			output.info(`executionsStarted  ${probeMetrics.executionsStarted}`);
@@ -1925,10 +2167,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 				const bound = PROBE_LATENCY_BUCKETS_MS[index];
 				output.info(`  ${bound === undefined ? "slower" : `<=${bound}ms`} ${count}`);
 			});
-			output.info("Cursor's approval command reports nothing, so approvals are attributed by");
-			output.info(`timing: an agent command starting within ${APPROVAL_ATTRIBUTION_MS}ms of an invocation was`);
-			output.info("released by it. Commands Cursor auto-ran from its own allowlist or sandbox");
-			output.info("needed no approval and land uniformly across the poll interval instead.");
+			output.info("Chats on Cursor's Agent Host runtime run commands without a terminal and");
+			output.info("never appear here.");
 			output.info("--- End Diagnostics ---");
 			await revealOutput();
 		}),
