@@ -33,6 +33,13 @@ Cursor's approval commands are undocumented and can change between releases:
 Run **Cursor Approve: List Cursor Composer Commands** after upgrading Cursor to verify that the approval commands still
 exist.
 
+### Subagent Allow research
+
+`feature/allow-subagents` retains the diagnostic probe and its findings. In the Cursor build checked on 2026-09-27,
+`composer.getComposerHandleById` returned `null` across the extension boundary and no registered command approved a
+subagent **Allow** action. Revisit that branch after Cursor exposes a Composer-handle API or a subagent approval
+command; do not replace the missing API with UI automation, keystrokes, or screen scraping.
+
 | Path                       | Role                                                       |
 | -------------------------- | ---------------------------------------------------------- |
 | `src/extension.ts`         | Polling, commands, status bar, diagnostics, output channel |

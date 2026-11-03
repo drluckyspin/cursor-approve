@@ -47,7 +47,7 @@ Click to toggle on/off the auto approval mode, or hover over the item for a smal
 Download the latest `.vsix` from [Releases](https://github.com/drluckyspin/cursor-approve/releases), then run e.g.:
 
 ```bash
-cursor --install-extension cursor-approve-0.4.0.vsix
+cursor --install-extension cursor-approve-0.5.0.vsix
 ```
 
 Reload your Cursor window (`Cmd+Shift+P` → **Developer: Reload Window**).
@@ -229,7 +229,7 @@ make check
 make build
 make lint
 make fmt
-make package    # builds cursor-approve-0.4.0.vsix
+make package    # builds cursor-approve-0.5.0.vsix
 make install    # packages and installs the VSIX into Cursor
 ```
 

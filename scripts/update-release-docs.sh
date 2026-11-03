@@ -57,13 +57,13 @@ elif grep -qE '^## \[Unreleased\]' "$CHANGELOG"; then
 	sed -i.bak -E "s/^## \\[Unreleased\\]/## [$VERSION] - $RELEASE_DATE/" "$CHANGELOG"
 	rm -f "$CHANGELOG.bak"
 
-	# Keep a blank [Unreleased] section ready for the next development cycle.
+	# Keep a blank [Unreleased] section ready for the next development cycle. The blank line that already
+	# follows the preamble separates it from the finalized section, so none is printed after the heading.
 	awk '
 		/^\[Semantic Versioning\]/ {
 			print
 			print ""
 			print "## [Unreleased]"
-			print ""
 			next
 		}
 		{ print }
