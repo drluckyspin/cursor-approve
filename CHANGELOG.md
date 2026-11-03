@@ -7,6 +7,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-03
+
 ### Added
 
 - **Show Diagnostics** reports whether the window's Cursor log was found, how many approval requests it has logged, and
