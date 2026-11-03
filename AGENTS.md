@@ -92,26 +92,51 @@ Useful verification commands in the Extension Development Host:
 
 When changing dashboard metrics, preserve these safeguards:
 
-- Never report approvals granted. Cursor's `run(e){ await zLo(e,"run") }` handler returns nothing whether it approved a
-  request or found nothing pending, no command exposes the pending-decision state, and extensions cannot read the
-  `composerShellToolPendingKeybindingsActive` context key. Report active time, which is measurable.
+- Approvals are counted from the window's Cursor renderer log, because nothing else reports them. Cursor's handler
+  returns nothing whether it approved a request or found nothing pending, no command exposes the pending-decision state,
+  and extensions cannot read the `composerShellToolPendingKeybindingsActive` context key. The renderer log records both
+  halves of every request: `ComposerWakelockManager` releases a chat's wakelock with `user-approval-requested` when its
+  agent stops to ask, and acquires one with `agent-loop-resumed` once the request is answered. The log sits two levels
+  above `context.logUri`. Run **Show Diagnostics** after upgrading Cursor to confirm the log is still found and still
+  logs requests.
+- Read that log for those two lines only. Capture the timestamp, action, reason, and chat ID, and never copy, store, or
+  log any other part of it. Stop each read after its last complete line rather than carrying a partial one to the next.
+  Start each extension host by replaying recent history to learn which requests are already pending, without counting
+  anything from it.
+- Credit a resolved request to this extension only when the agent resumed within `APPROVAL_RESUME_WINDOW_MS` of one of
+  this window's poll calls returning, after the request was logged, and take that call so it is never credited twice. On
+  Cursor 3.27.22 agents resumed 7 to 10ms after the call that released them, while a click on Run lands anywhere in the
+  poll interval. A call from before the request cannot have released it, and without that check a click shortly after an
+  idle poll counted. Prefer the latest call that returned before the resume over one that returned just after it. Record
+  **Approve Pending Tool Call Once** calls too: one matched to a request consumes it without credit, because it was not
+  approved automatically. Never read the log while an approval call awaits its reply, since a resume read before its
+  call is recorded is lost.
+- Attribute each approval by when the agent resumed, not when the log was read, so one read after midnight or after the
+  stretch restarted lands in neither. Discard approval calls by how far the log has been read, never by age: a poll
+  interval of up to 30 seconds, or an `onlyWhenFocused` pause, would otherwise expire a call before its resume is read.
+  Drain the log when polling stops and before the final merge on shutdown, since the next extension host replays it
+  without counting. Only that first read replays; a log Cursor replaces mid-session is read from its start and counted.
+  Log timestamps are local time without an offset, so resolve the hour repeated when daylight saving time ends to the
+  occurrence nearer the read.
+- Never infer approvals from how long the approval call takes. With nothing pending, Cursor's handler took anywhere from
+  4ms to a second, often in several windows at once, and timing it, even against a baseline call queued just ahead,
+  counted dozens of approvals in idle windows. A log line that goes missing reads as zero rather than too many.
+- Never count approvals from terminal executions. Chats on Cursor's Agent Host runtime, introduced in 3.27.12, run
+  commands without a VS Code terminal, so `onDidStartTerminalShellExecution` never fires for them. For the rest, the
+  same command runs whether this extension approved it, Cursor auto-ran it from its own allowlist, or the user clicked
+  Run. The terminal probe stays in diagnostics.
 - The day's totals live in `daily-metrics.json` under `globalStorageUri`, not in `globalState`. Every Cursor window runs
   its own extension host with its own in-memory copy of `globalState`, never sees another window's writes, and
   overwrites the shared value wholesale, which made the totals a race between windows. Keep the merge semantics: re-read
   immediately before writing, add counts as per-window deltas, and fold active time once from the shared checkpoint so
-  concurrent windows cannot double-count a global setting.
+  concurrent windows cannot double-count a global setting. Write the file through a temporary file and an atomic rename:
+  `vscode.workspace.fs.rename` with `overwrite` deletes the target first, and a window that read in that gap started the
+  day over. Treat only a missing file as empty, and never write totals lower than ones this window has already seen
+  today.
 - Keep every dashboard value at minute granularity or coarser. The tooltip is rebuilt each tick and reassigned only when
   its rendered text changes, so a per-second value would redraw a hovered tooltip every second.
 - Restrict trusted Markdown command links to the explicit dashboard command allowlist. Keep the tooltip background
   theme-controlled; extensions cannot customize it through VS Code's API.
-- Agent terminal executions do reach the extension host, so the dashboard reports them as commands run. Never relabel
-  that as approvals granted: the same command runs whether this extension approved it, Cursor auto-ran it from its own
-  allowlist, or the user clicked Run.
-- Approvals are attributed by latency, and the threshold is measured rather than chosen. Commands awaiting approval
-  started 44 to 75ms after the invocation that released them, which is why `APPROVAL_ATTRIBUTION_MS` is 100; commands
-  Cursor auto-ran from its allowlist or sandbox land uniformly across the poll interval. Quote the threshold, not the
-  observations, in anything user-facing. Keep it well inside the interval, and re-measure with the diagnostics latency
-  buckets before changing it.
 - Never read `TerminalShellExecution.commandLine`. It fires for every execution the host exposes, including commands the
   user typed, and their arguments routinely carry tokens and other secrets. Terminal names are sufficient.
 - Active time must accrue as it passes, not from a single start timestamp, so that time the machine spent suspended is

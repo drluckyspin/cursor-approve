@@ -144,9 +144,9 @@ Hover over the **Auto Approve** status item to pop up a small stats dashboard.
 
 <!-- markdownlint-disable MD033 -->
 
-| Dashboard                                                                                                                             | Measures                                                                                                                                                                                                                                                                                                                                                                                                 |
-| ------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| <img src="docs/dashboard.png" width="780" alt="The status bar hover dashboard with active time, approval counts, and footer links" /> | **Active since** — When the current stretch of automatic approval began<br><br>**Current Window** — Time and commands in this window during that stretch<br><br>**Total Today** — Time and commands since local midnight across open Cursor windows<br><br>**Note** - Durations count time Cursor Approve was running and active, not wall-clock time. Time while the machine is asleep is not included. |
+| Dashboard                                                                                                                             | Measures                                                                                                                                                                                                                                                                                                                                                                                                   |
+| ------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| <img src="docs/dashboard.png" width="780" alt="The status bar hover dashboard with active time, approval counts, and footer links" /> | **Active since** — When the current stretch of automatic approval began<br><br>**Current Window** — Time and approvals in this window during that stretch<br><br>**Total Today** — Time and approvals since local midnight across open Cursor windows<br><br>**Note** - Durations count time Cursor Approve was running and active, not wall-clock time. Time while the machine is asleep is not included. |
 
 <!-- markdownlint-enable MD033 -->
 
@@ -157,15 +157,15 @@ read as less than the clock has moved since **Active since**: a sleep is exclude
 application if `onlyWhenFocused` is on. **Total Today** accumulates the same way from midnight and is shared across your
 open Cursor windows.
 
-`2 / 3 Auto Approved` means Cursor Approve approved two of the three agent commands that ran during that period.
-Commands Cursor auto-ran itself, through its own allowlist or sandbox, count toward the total but not the approved
-figure.
+`3 Auto Approved` means Cursor Approve approved three pending agent requests during that period. Commands Cursor ran on
+its own, through its allowlist or sandbox, are not counted, and neither are requests you approved yourself, unless you
+happened to click within a tenth of a second of one of Cursor Approve's checks in a chat it could not approve.
 
-The total is exact; the approved figure is close rather than certain. Cursor's approval command reports nothing back, so
-an approval is inferred from timing: a command released by an approval starts within about 100ms of one, while a command
-Cursor auto-ran lands anywhere in the check interval. Every real approval falls inside that window, so the figure can
-only ever overcount, by roughly one in ten of the commands Cursor ran on its own at the default interval. **Show
-Diagnostics** prints the timing it is derived from.
+Cursor's approval command reports nothing back, so the count comes from the log Cursor already writes for each window.
+Cursor logs a line when an agent stops to ask for approval and another when it resumes, and Cursor Approve counts a
+request when the agent resumed right after one of its own checks. It reads only those two kinds of line and keeps
+nothing but the count. If a Cursor update changes that logging, or Cursor's log level is set above **Info**, the count
+stays at zero rather than guessing. **Show Diagnostics** shows whether the log was found and lists recent requests.
 
 A warning line appears only while it applies: an unavailable approval command, unsuccessful approval attempts,
 `onlyWhenFocused` restricting approval to the focused window, or `allowlist` mode.
