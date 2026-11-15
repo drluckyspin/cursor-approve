@@ -45,6 +45,7 @@ command; do not replace the missing API with UI automation, keystrokes, or scree
 | `src/extension.ts`         | Polling, commands, status bar, diagnostics, output channel |
 | `package.json`             | Extension manifest, settings schema, npm scripts           |
 | `Makefile` / `scripts/`    | Build tooling, logging, and version synchronization        |
+| `scripts/screenshots/`     | README image capture in a throwaway, signed-out Cursor     |
 | `VERSION`                  | Semantic-version source of truth                           |
 | `.vscode/launch.json`      | F5 opens an Extension Development Host                     |
 | `.github/workflows/ci.yml` | CI type-checks, compiles, packages, and uploads the VSIX   |
@@ -59,6 +60,7 @@ command; do not replace the missing API with UI automation, keystrokes, or scree
 | Build                  | `npm install`, `tsc` to `out/`, then `vsce package` |
 | Formatting             | dprint using the project `dprint.json`              |
 | Script logging         | `scripts/log.bash`                                  |
+| README images          | Playwright driving the installed Cursor             |
 | Development entrypoint | `make`                                              |
 
 ## Development Commands
@@ -76,6 +78,8 @@ make fmt
 make fmt-check
 make package
 make bump-version
+make screenshots
+make gif SOURCE=/path/to/recording.mov
 make clean
 ```
 
@@ -154,6 +158,54 @@ When changing dashboard metrics, preserve these safeguards:
   `onlyWhenFocused` left the window in the background, neither of which the day's total folds, so reporting it made the
   two rows disagree.
 
+## README Screenshots
+
+`make screenshots` regenerates `docs/dashboard.png`, `docs/dashboard-copy.png`, and `docs/auto-approve.gif`, and
+`make update-release-docs` runs it. `scripts/screenshots/capture.mjs` launches the installed Cursor (`CURSOR_APP`) as a
+throwaway instance, loads this extension and `scripts/screenshots/fixture/` into it as development extensions, and
+drives it with Playwright. `docs/overview.gif` shows a real Cursor agent, so it is recorded by hand and converted with
+`make gif`.
+
+Preserve these safeguards:
+
+- Capture only from inside the throwaway instance, through Playwright's DevTools-protocol screenshots and input. Never
+  capture the real screen, sample its pixels, or send OS-level input such as synthetic mouse events or AppleScript
+  keystrokes; endpoint protection treats those as hostile, and the instance needs none of them.
+- The instance runs signed out. `--classic` opens the editor window instead of the Agents window, and
+  `--skip-onboarding` with `--suppress-popups-on-startup` skips the editor's sign-in prompt; both would otherwise block
+  the capture at a login screen. Never sign the instance in, and never copy credentials, auth state, or settings from
+  the user's Cursor profile into it; the only thing taken from the user's install is the color theme, loaded from its
+  extensions folder. Cursor's own status bar items (Tab Stats, Agent Stats, and the commit score) stay visible in the
+  images on purpose.
+- Keep the instance isolated: its own `--user-data-dir`, `--extensions-dir`, `--logsPath`, and `HOME`, plus
+  `--use-mock-keychain`, and an environment without the host editor's `VSCODE_*`, `ELECTRON_*`, and `CURSOR_*`
+  variables. The profile lives under `/tmp` because Cursor opens a socket inside `--user-data-dir`, and a Unix socket
+  path is capped at 103 characters, which the macOS per-user temporary folder nearly fills on its own.
+- The window ignores the real mouse (`setIgnoreMouseEvents`), because the user's pointer crossing it took the hover away
+  from the scripted one. Playwright's input reaches the renderer directly and is unaffected.
+- Copy Dashboard Image runs for real, but the instance's `PATH` starts with stand-ins for `osascript`, `xclip`, and
+  `wl-copy` that keep the PNG, so the user's clipboard is never written.
+- Only the fixture writes `ComposerWakelockManager` lines, and only to the throwaway instance's renderer log. It does
+  nothing unless `CURSOR_APPROVE_FIXTURE_DIR` is set, which only the capture script does, on the instance it launches,
+  because anywhere else its commands would shadow Cursor's real approval commands. It never ships, since `.vscodeignore`
+  excludes `scripts/**`.
+- The approval counts in the images come from the extension's real counting path, not from the fixture. The fixture
+  resumes each request 8ms after the poll call that answered it, as Cursor 3.27.22 did, and the capture fails unless the
+  hover shows the expected counts, the current version, and no **Unavailable** pill. Only the earlier part of **Total
+  Today** is seeded (`SEEDED_TODAY`), so that the two rows differ.
+- `docs/auto-approve.gif` is a tour: the pointer switches approval on, the dashboard counts the fixture's requests, and
+  the pointer switches it off and returns to where it started, so the loop has no seam. Take the stills mid-tour, while
+  the hover shows the final count, so all three images agree. The frames are deduplicated byte for byte, so keep
+  `--disable-gpu`, without which GPU compositing dithers an unchanged hover differently on every capture. Keep the three
+  background-throttling flags beside it too, without which Chromium stops painting a covered window and the tour stalls.
+- Open the dashboard only once the extension's status bar message has cleared. It shows one for two seconds after a
+  toggle or a copy, and adding or removing it rebuilds the status bar, which closes an open hover. Now and then an
+  instance stops showing the hover altogether, so a failed attempt starts over in a fresh instance, up to `ATTEMPTS`.
+  Each attempt writes into its own profile, and the images are copied into `docs/` only when all three exist, so a
+  failure never leaves a mismatched set.
+- When the wakelock line format or the crediting rules change in `src/extension.ts`, change the fixture to match. A
+  failing `make screenshots` is often the first sign that they have drifted apart.
+
 ## Version and Release
 
 | File           | Role                                                                                      |
@@ -162,13 +214,14 @@ When changing dashboard metrics, preserve these safeguards:
 | `package.json` | Synced by `make bump-version` (including `package-lock.json`)                             |
 | `README.md`    | VSIX install examples synced by `make bump-version`                                       |
 | `CHANGELOG.md` | `[Unreleased]` during development; finalized by `make update-release-docs` before tagging |
+| `docs/`        | Dashboard images and approval GIF regenerated by `make update-release-docs`               |
 
 Use `make bump-version X.Y.Z` to update `VERSION` and synchronize the other version files. The release workflow is:
 
 ```bash
 # Document changes under ## [Unreleased] in CHANGELOG.md while developing.
 make bump-version X.Y.Z
-make update-release-docs
+make update-release-docs   # also regenerates the docs/ screenshots; commit them with the release
 make lint
 make fmt-check
 make package
@@ -212,6 +265,7 @@ bypass on a user-owned repository. Tag and push only when explicitly requested.
 | Commands and settings schema | `package.json`, `src/extension.ts` |
 | Build and release tooling    | `Makefile`, `scripts/`, `VERSION`  |
 | User documentation           | `README.md`, `CHANGELOG.md`        |
+| README screenshots           | `scripts/screenshots/`, `docs/`    |
 | Agent instructions           | `AGENTS.md`                        |
 | Continuous integration       | `.github/workflows/ci.yml`         |
 

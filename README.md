@@ -229,14 +229,40 @@ make check
 make build
 make lint
 make fmt
-make package    # builds cursor-approve-0.5.0.vsix
-make install    # packages and installs the VSIX into Cursor
+make package      # builds cursor-approve-0.5.0.vsix
+make install      # packages and installs the VSIX into Cursor
+make screenshots  # regenerates the README's dashboard images and approval GIF
 ```
 
 Press `F5` in Cursor to open an Extension Development Host. Test there, then run **Developer: Reload Window** in that
 window after source changes.
 
 Run `make bump-version X.Y.Z` to update `VERSION`, `package.json`, `package-lock.json`, and the VSIX install example.
+
+### Screenshots
+
+`make screenshots` regenerates `docs/dashboard.png`, `docs/dashboard-copy.png`, and `docs/auto-approve.gif` from the
+current build, and `make update-release-docs` runs it, so each release ships images of itself. It launches your
+installed Cursor as a throwaway, signed-out instance with its own profile, loads the extension into it with a stand-in
+for Cursor's approval command, and captures the status bar and hover from inside that window. It never signs in, and
+takes nothing from your own Cursor setup except the color theme's extension. A Cursor window opens for about 30 seconds
+while it works; it ignores the mouse, but do not type into it. It needs FFmpeg (`brew install ffmpeg`). Set `THEME` to
+capture in another installed color theme (the default is City Fog), or `CURSOR_APP` when Cursor is not in
+`/Applications`.
+
+`docs/overview.gif` shows a real Cursor agent asking for approval, so it is recorded by hand. Convert a screen recording
+with:
+
+```bash
+make gif SOURCE=/path/to/recording.mov
+```
+
+This writes `docs/overview.gif` at 900px wide and 12fps. Set `OUTPUT`, `WIDTH`, `FPS`, `START`, `DURATION`, or `CROP` to
+tailor it; for example:
+
+```bash
+make gif SOURCE=/path/to/recording.mov START=11 DURATION=11.4 CROP=630:430:2625:1715
+```
 
 ### Project layout
 
@@ -248,17 +274,22 @@ cursor-approve/
 │   └── copy-dashboard.html       # Canvas renderer behind Copy Dashboard Image
 ├── scripts/
 │   ├── bump-version.sh           # Sync VERSION into package.json and README
-│   ├── update-release-docs.sh    # Finalize CHANGELOG on publish
+│   ├── update-release-docs.sh    # Finalize CHANGELOG before tagging
+│   ├── generate-screenshots.sh   # make screenshots
+│   ├── generate-gif.sh           # make gif
+│   ├── screenshots/
+│   │   ├── capture.mjs           # Drives a throwaway Cursor and writes docs/ images
+│   │   └── fixture/              # Stand-in for Cursor's approval commands and log lines
 │   └── log.bash                  # Shared colored script logging
 ├── docs/                         # README screenshots and GIFs
 ├── .github/workflows/
 │   ├── ci.yml                    # Type check, compile, package, upload .vsix
-│   └── release.yml               # Publish the VSIX and commit the CHANGELOG
+│   └── release.yml               # Package the VSIX and attach it to the release
 ├── .vscode/
 │   ├── launch.json               # F5 → Extension Development Host
 │   └── tasks.json                # npm compile / watch
 ├── AGENTS.md                     # Guidance for coding agents
-├── dprint.json                   # Markdown and TypeScript formatting
+├── dprint.json                   # Markdown, TypeScript, and script formatting
 ├── Makefile                      # Development and release commands
 ├── package.json                  # Extension manifest and settings schema
 ├── tsconfig.json

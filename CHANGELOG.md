@@ -7,6 +7,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- `make screenshots` regenerates the README's dashboard screenshots, and the GIF of the dashboard counting approvals,
+  from the current build, by running the extension in a throwaway, signed-out instance of the installed Cursor.
+  `make update-release-docs` runs it, so each release ships images of itself.
+- `make gif` converts a screen recording into an optimized GIF, for the README overview that shows a real Cursor agent.
+
 ## [0.5.0] - 2026-11-03
 
 ### Added

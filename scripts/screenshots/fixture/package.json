@@ -1,0 +1,15 @@
+{
+	"name": "screenshot-fixture",
+	"displayName": "Cursor Approve Screenshot Fixture",
+	"description": "Stands in for Cursor's approval commands and logging inside the Cursor instance make screenshots launches.",
+	"publisher": "drluckyspin",
+	"version": "0.0.0",
+	"private": true,
+	"engines": {
+		"vscode": "^1.93.0"
+	},
+	"activationEvents": [
+		"*"
+	],
+	"main": "./extension.js"
+}

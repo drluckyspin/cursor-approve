@@ -157,12 +157,31 @@ bump-version:
 	@bash "$(MAKEFILE_DIR)scripts/bump-version.sh" $(if $(BUMP_VERSION),"$(BUMP_VERSION)")
 	@$(LOGGER) log_success "Version bump complete"
 
-# Finalize CHANGELOG for a published version (also run by release.yml).
-.PHONY: update-release-docs ## Finalize CHANGELOG for VERSION
-update-release-docs:
+# Finalize CHANGELOG for a release and refresh the README screenshots, so both show the new version.
+.PHONY: update-release-docs ## Finalize CHANGELOG and refresh screenshots for VERSION
+update-release-docs: screenshots
 	@$(LOGGER) log_target "Updating release documentation"
 	@bash "$(MAKEFILE_DIR)scripts/update-release-docs.sh" "$(EXTENSION_VERSION)" "$(or $(RELEASE_DATE),$(shell date -u +%Y-%m-%d))"
 	@$(LOGGER) log_success "Release documentation updated"
+
+# Regenerate docs/dashboard.png, docs/dashboard-copy.png, and docs/auto-approve.gif from the current build.
+# Optional: THEME="City Fog" CURSOR_APP=/Applications/Cursor.app/Contents/MacOS/Cursor KEEP_PROFILE=true
+.PHONY: screenshots ## Regenerate README screenshots in a throwaway, signed-out Cursor
+screenshots: build
+	@$(LOGGER) log_target "Generating README screenshots"
+	@THEME="$(or $(THEME),City Fog)" CURSOR_APP="$(CURSOR_APP)" KEEP_PROFILE="$(KEEP_PROFILE)" \
+		bash "$(MAKEFILE_DIR)scripts/generate-screenshots.sh"
+	@$(LOGGER) log_success "Screenshots updated in docs/"
+
+# Convert a screen recording to an optimized documentation GIF, for docs/overview.gif, which shows a real
+# Cursor agent and so cannot be generated.
+# Required: SOURCE=/path/to/recording.mov
+# Optional: OUTPUT=docs/demo.gif WIDTH=900 FPS=12 START=0 DURATION= CROP=width:height:x:y
+.PHONY: gif ## Convert a screen recording to a GIF (SOURCE=/path/to/recording.mov)
+gif:
+	@SOURCE="$(SOURCE)" OUTPUT="$(or $(OUTPUT),$(MAKEFILE_DIR)docs/overview.gif)" WIDTH="$(or $(WIDTH),900)" \
+		FPS="$(or $(FPS),12)" START="$(or $(START),0)" DURATION="$(DURATION)" CROP="$(CROP)" \
+		bash "$(MAKEFILE_DIR)scripts/generate-gif.sh"
 
 # Remove generated extension output and VSIX archives.
 .PHONY: clean ## Remove build artifacts
