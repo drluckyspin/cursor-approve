@@ -33,7 +33,7 @@ through a status bar item that gets added to the far right.
 
 <!-- markdownlint-disable MD033 -->
 
-<img src="docs/auto-approve.gif" width="650" alt="Toggling automatic approval off and on from the status bar" />
+<img src="docs/auto-approve.gif" width="560" alt="Switching automatic approval on from the status bar, the dashboard counting approvals, and switching it off" />
 
 <!-- markdownlint-enable MD033 -->
 
@@ -146,7 +146,7 @@ Hover over the **Auto Approve** status item to pop up a small stats dashboard.
 
 | Dashboard                                                                                                                             | Measures                                                                                                                                                                                                                                                                                                                                                                                                   |
 | ------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| <img src="docs/dashboard.png" width="780" alt="The status bar hover dashboard with active time, approval counts, and footer links" /> | **Active since** — When the current stretch of automatic approval began<br><br>**Current Window** — Time and approvals in this window during that stretch<br><br>**Total Today** — Time and approvals since local midnight across open Cursor windows<br><br>**Note** - Durations count time Cursor Approve was running and active, not wall-clock time. Time while the machine is asleep is not included. |
+| <img src="docs/dashboard.png" width="420" alt="The status bar hover dashboard with active time, approval counts, and footer links" /> | **Active since** — When the current stretch of automatic approval began<br><br>**Current Window** — Time and approvals in this window during that stretch<br><br>**Total Today** — Time and approvals since local midnight across open Cursor windows<br><br>**Note** - Durations count time Cursor Approve was running and active, not wall-clock time. Time while the machine is asleep is not included. |
 
 <!-- markdownlint-enable MD033 -->
 
